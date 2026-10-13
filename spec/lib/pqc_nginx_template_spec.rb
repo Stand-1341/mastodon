@@ -15,15 +15,17 @@ RSpec.describe 'dist/nginx.conf PQC hybrid TLS template', type: :feature do
   end
 
   it 'advertises the hybrid X25519MLKEM768 group first' do
-    groups_line = conf[/ssl_groups\s+([^;]+);/, 1]
-    expect(groups_line).to be_present
-    expect(groups_line.split.first).to eq('X25519MLKEM768')
+    directives = conf.scan(/(?:ssl_groups|ssl_conf_command\s+Groups)\s+([^;]+);/).flatten
+    expect(directives).not_to be_empty, 'expected ssl_groups or ssl_conf_command Groups directive'
+    groups = directives.first.split[0].split(':')
+    expect(groups.first).to eq('X25519MLKEM768')
   end
 
   it 'keeps classical fallback groups for non-PQ peers' do
-    groups_line = conf[/ssl_groups\s+([^;]+);/, 1]
-    %w[X25519 ECDHE-SECP256R1].each do |fallback|
-      expect(groups_line).to include(fallback), "expected classical fallback #{fallback} in: #{groups_line}"
+    directives = conf.scan(/(?:ssl_groups|ssl_conf_command\s+Groups)\s+([^;]+);/).flatten
+    groups = directives.first.split[0].split(':')
+    %w[X25519 P-256].each do |fallback|
+      expect(groups).to include(fallback), "expected classical fallback #{fallback} in: #{groups}"
     end
   end
 
@@ -33,7 +35,6 @@ RSpec.describe 'dist/nginx.conf PQC hybrid TLS template', type: :feature do
 
   it 'documents how to verify negotiation with openssl s_client' do
     expect(conf).to include('s_client')
-    expect(conf).to include('X25519MLKEM768')
   end
 
   it 'places ssl_groups in a TLS (server) context' do
