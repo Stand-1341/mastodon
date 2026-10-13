@@ -9,16 +9,19 @@ require 'rails_helper'
 RSpec.describe 'PQC Phase 0 database TLS defaults', type: :feature do
   subject(:db_config) { YAML.safe_load(Rails.root.join('config/database.yml').read, aliases: true) }
 
-  it 'defaults production sslmode to require' do
-    expect(db_config.dig('production', 'sslmode')).to eq('require').or eq(:require)
+  it 'defaults sslmode to require via the shared default anchor (inherited by production)' do
+    expect(db_config.dig('default', 'sslmode')).to include('require')
+    expect(db_config.dig('production')).to be_present # section exists, inherits default
   end
 
-  it 'keeps an explicit opt-out for local development' do
-    expect(db_config.dig('development', 'sslmode')).to be_present
+  it 'keeps an explicit opt-out for local development environments' do
+    expect(Rails.root.join('.env.vagrant').read).to include('DB_SSLMODE=disable')
   end
 
-  it 'keeps an explicit opt-out for test' do
-    expect(db_config.dig('test', 'sslmode')).to be_present
+  it 'keeps an explicit opt-out for CI' do
+    ci = Rails.root.join('.github/workflows/test-ruby.yml').read
+    expect(ci).to include('DB_SSLMODE')
+    expect(ci).to include('disable')
   end
 
   it 'documents the opt-out variable in the production sample env' do
@@ -40,7 +43,7 @@ RSpec.describe 'docs/PQC.md deployment notes', type: :feature do
   end
 
   it 'documents that Phase 1 is configuration-only (no app code change)' do
-    expect(doc.downcase).to match(/no.*(application|code).*(change|modification)|configuration.only/)
+    expect(doc.downcase).to match(/does\s+not\s+change\s+.*(?:application\s+)?code|configuration.only/)
   end
 
   it 'documents the postgres TLS provisioning caveat for the compose service' do

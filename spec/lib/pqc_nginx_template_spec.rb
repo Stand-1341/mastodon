@@ -37,9 +37,9 @@ RSpec.describe 'dist/nginx.conf PQC hybrid TLS template', type: :feature do
     expect(conf).to include('s_client')
   end
 
-  it 'places ssl_groups in a TLS (server) context' do
+  it 'places the TLS groups directive in a TLS (server) context' do
     lines = conf.lines
-    idx = lines.index { |l| l =~ /ssl_groups/ }
+    idx = lines.index { |l| l =~ /ssl_groups|ssl_conf_command\s+Groups/ }
     expect(idx).to be_present
     preceding = lines[0..idx].join
     expect(preceding).to match(/server\s*\{/)

@@ -14,7 +14,6 @@ namespace :pqc do
 
     database_configuration = ActiveRecord::Base.configurations
       .configs_for(env_name: Rails.env, name: 'primary')
-      .first
       &.configuration_hash || {}
 
     storage = Paperclip::Attachment.default_options[:storage]
