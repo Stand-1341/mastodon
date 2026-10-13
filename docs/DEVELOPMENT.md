@@ -68,6 +68,10 @@ docker compose -f .devcontainer/compose.yaml exec app bin/setup
 docker compose -f .devcontainer/compose.yaml exec app bin/dev
 ```
 
+The development container opts out of PostgreSQL TLS because its bundled local
+database does not configure TLS. For other local databases without TLS, set
+`DB_SSLMODE=disable`; the application default is `require`.
+
 ### Dev Containers
 
 Within IDEs that support the [Development Containers] specification, start the

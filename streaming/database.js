@@ -81,23 +81,27 @@ export function configFromEnv(env, environment) {
     }
   } else if (Object.hasOwn(pgConfigs, environment)) {
     baseConfig = pgConfigs[environment];
-
-    if (env.DB_SSLMODE) {
-      switch(env.DB_SSLMODE) {
-      case 'disable':
-      case '':
-        baseConfig.ssl = false;
-        break;
-      case 'no-verify':
-        baseConfig.ssl = { rejectUnauthorized: false };
-        break;
-      default:
-        baseConfig.ssl = {};
-        break;
-      }
-    }
   } else {
     throw new Error('Unable to resolve postgresql database configuration.');
+  }
+
+  if (env.DB_SSLMODE !== undefined) {
+    switch (env.DB_SSLMODE) {
+    case 'disable':
+    case '':
+      baseConfig.ssl = false;
+      break;
+    case 'no-verify':
+      baseConfig.ssl = { rejectUnauthorized: false };
+      break;
+    default:
+      baseConfig.ssl = {};
+      break;
+    }
+  } else if (baseConfig.ssl === undefined) {
+    // Match config/database.yml: database connections use TLS unless explicitly
+    // opted out, including when DATABASE_URL omits an SSL mode.
+    baseConfig.ssl = {};
   }
 
   return {

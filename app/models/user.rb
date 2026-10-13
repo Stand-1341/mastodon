@@ -59,6 +59,8 @@ class User < ApplicationRecord
   include User::PamAuthenticable
   include User::SignInToken
 
+  # devise-two-factor declares `encrypts :otp_secret`; Devise's accessor keeps
+  # TOTP verification transparent to callers while decrypting the stored value.
   devise :two_factor_authenticatable,
          otp_secret_length: 32
 

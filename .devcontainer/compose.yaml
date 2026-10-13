@@ -18,6 +18,7 @@ services:
       DB_USER: postgres
       DB_PASS: postgres
       DB_PORT: '5432'
+      DB_SSLMODE: disable
       ES_ENABLED: 'true'
       ES_HOST: es
       ES_PORT: '9200'

@@ -103,6 +103,7 @@ jobs:
       DB_HOST: localhost
       DB_USER: postgres
       DB_PASS: postgres
+      DB_SSLMODE: disable
       COVERAGE: ${{ matrix.ruby-version == '.ruby-version' }}
       RAILS_ENV: test
       ALLOW_NOPAM: true
@@ -206,6 +207,7 @@ jobs:
       DB_HOST: localhost
       DB_USER: postgres
       DB_PASS: postgres
+      DB_SSLMODE: disable
       RAILS_ENV: test
       BUNDLE_WITH: test
       LOCAL_DOMAIN: localhost:3000
@@ -338,6 +340,7 @@ jobs:
       DB_HOST: localhost
       DB_USER: postgres
       DB_PASS: postgres
+      DB_SSLMODE: disable
       RAILS_ENV: test
       BUNDLE_WITH: test
       ES_ENABLED: true
