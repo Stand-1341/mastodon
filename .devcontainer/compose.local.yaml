@@ -1,0 +1,52 @@
+# Use with compose.yaml for a localhost-only setup outside a devcontainer-aware editor.
+services:
+  app:
+    init: true
+    command: bin/dev
+    restart: unless-stopped
+    environment:
+      DISABLE_RAILS_RELOADING: 'true'
+      WEB_CONCURRENCY: '0'
+      ES_ENABLED: 'false'
+      LIBRE_TRANSLATE_ENDPOINT: ''
+      REMOTE_DEV: '1'
+    ports: !override
+      - '127.0.0.1:3000:3000'
+      - '127.0.0.1:3036:3036'
+      - '127.0.0.1:4000:4000'
+    volumes:
+      - bundle-data:/usr/local/bundle
+      - node-modules:/workspaces/mastodon/node_modules
+      - streaming-node-modules:/workspaces/mastodon/streaming/node_modules
+      - yarn-cache:/root/.yarn
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  db:
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  es:
+    profiles: ['optional']
+
+  libretranslate:
+    profiles: ['optional']
+
+volumes:
+  bundle-data:
+  node-modules:
+  streaming-node-modules:
+  yarn-cache:

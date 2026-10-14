@@ -5,8 +5,8 @@ require 'active_support/core_ext/integer/time'
 Rails.application.configure do
   # Settings specified here will take precedence over those in config/application.rb.
 
-  # Make code changes take effect immediately without server restart.
-  config.enable_reloading = true
+  # File polling on Windows bind mounts can dominate request time.
+  config.enable_reloading = ENV['DISABLE_RAILS_RELOADING'] != 'true'
 
   # Do not eager load code on boot.
   config.eager_load = false

@@ -72,6 +72,59 @@ The development container opts out of PostgreSQL TLS because its bundled local
 database does not configure TLS. For other local databases without TLS, set
 `DB_SSLMODE=disable`; the application default is `require`.
 
+#### Localhost-only Docker setup (including Windows)
+
+On Windows, use Docker Desktop with its Linux/WSL 2 engine. Ruby, PostgreSQL,
+Redis, and Node run inside containers; no Windows-native Ruby install is needed.
+The local override binds ports only to `127.0.0.1`, keeps dependencies in Linux
+volumes, waits for PostgreSQL and Redis, and starts all four development processes.
+Elasticsearch and LibreTranslate are disabled for this minimal setup. Ruby
+reloading is disabled to avoid expensive file polling on Windows bind mounts;
+after Ruby/config changes, run `docker compose restart app` (with the same Compose
+options). To restore automatic Ruby reloading, set `DISABLE_RAILS_RELOADING` to
+`'false'` in the local override. Vite still reloads frontend changes automatically.
+This requires Docker Compose 2.24.4 or newer.
+
+Run from the repository root:
+
+```shell
+docker compose -p mastodon-local -f .devcontainer/compose.yaml -f .devcontainer/compose.local.yaml build app
+docker compose -p mastodon-local -f .devcontainer/compose.yaml -f .devcontainer/compose.local.yaml up -d --wait db redis
+```
+
+Before initializing a **new** database, generate encryption keys with
+`docker compose -p mastodon-local -f .devcontainer/compose.yaml -f .devcontainer/compose.local.yaml run --rm app bin/rails db:encryption:init`.
+Store the three printed environment assignments in the gitignored
+`.env.development.local`. For an existing database, reuse its existing secrets;
+never regenerate them. Keep this file with database backups and keep
+`LOCAL_DOMAIN` unchanged for the lifetime of the database.
+
+Install dependencies and prepare the database, then start the application:
+
+```shell
+docker compose -p mastodon-local -f .devcontainer/compose.yaml -f .devcontainer/compose.local.yaml run --rm app bin/setup
+docker compose -p mastodon-local -f .devcontainer/compose.yaml -f .devcontainer/compose.local.yaml up -d app
+```
+
+Open http://localhost:3000. The first startup and frontend compilation can take
+several minutes on a Windows bind mount. Development mail is available at
+http://localhost:3000/letter_opener. This is an HTTP development environment,
+not a public federation deployment or a validation of hybrid TLS/PQC security.
+
+To make subsequent commands shorter, these Compose-only settings can be placed
+in the gitignored root `.env` (preserve any existing settings):
+
+```dotenv
+COMPOSE_PROJECT_NAME=mastodon-local
+COMPOSE_PATH_SEPARATOR=;
+COMPOSE_FILE=.devcontainer/compose.yaml;.devcontainer/compose.local.yaml
+```
+
+Then use `docker compose up -d` to start, `docker compose logs --tail 100 app`
+to inspect logs, `docker compose ps` for status, and `docker compose stop` to stop.
+Without these settings, include the same `-p` and `-f` options shown above.
+Do not use `down -v` unless you intend to delete the database and dependency volumes.
+
 ### Dev Containers
 
 Within IDEs that support the [Development Containers] specification, start the

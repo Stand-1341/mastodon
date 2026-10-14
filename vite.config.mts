@@ -109,6 +109,7 @@ export const config: UserConfigFnPromise = async ({ mode, command }) => {
       },
     },
     server: {
+      host: process.env.BIND ?? 'localhost',
       headers: {
         // This is needed in dev environment because we load the worker from `/dev-sw/dev-sw.js`,
         // but it needs to be scoped to the whole domain
