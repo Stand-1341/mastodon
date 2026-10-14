@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { checkServerIdentity } from 'node:tls';
+
 import pg from 'pg';
 import pgConnectionString from 'pg-connection-string';
 
@@ -32,9 +35,31 @@ export function configFromEnv(env, environment) {
    * @type {pg.PoolConfig}
    */
   let baseConfig = {};
+  /** @type {string | undefined} */
+  let urlSslMode;
 
   if (env.DATABASE_URL) {
-    const parsedUrl = pgConnectionString.parse(env.DATABASE_URL);
+    let parsedUrl;
+    /** @type {import('node:tls').ConnectionOptions | undefined} */
+    let urlCertificateOptions;
+    try {
+      parsedUrl = pgConnectionString.parse(env.DATABASE_URL);
+      if (parsedUrl.ssl === false && (parsedUrl.sslcert || parsedUrl.sslkey || parsedUrl.sslrootcert)) {
+        // The parser loads these files, then discards them for sslmode=disable.
+        // Retain them in case DB_SSLMODE explicitly re-enables verified TLS.
+        urlCertificateOptions = {
+          cert: parsedUrl.sslcert ? readFileSync(parsedUrl.sslcert, 'utf8') : undefined,
+          key: parsedUrl.sslkey ? readFileSync(parsedUrl.sslkey, 'utf8') : undefined,
+          ca: parsedUrl.sslrootcert ? readFileSync(parsedUrl.sslrootcert, 'utf8') : undefined,
+        };
+      }
+    } catch (error) {
+      throw new Error('Unable to parse DATABASE_URL; check its format and sslrootcert/sslcert/sslkey file paths', { cause: error });
+    }
+    urlSslMode = parsedUrl.sslmode ?? (parsedUrl.ssl === false ? 'disable' : undefined);
+    if (parsedUrl.sslrootcert === '') {
+      throw new Error('Invalid sslrootcert in DATABASE_URL; provide a readable PEM CA file path');
+    }
 
     // The result of dbUrlToConfig from pg-connection-string is not type
     // compatible with pg.PoolConfig, since parts of the connection URL may be
@@ -59,20 +84,23 @@ export function configFromEnv(env, environment) {
     if (typeof parsedUrl.database === 'string') baseConfig.database = parsedUrl.database;
     if (typeof parsedUrl.options === 'string') baseConfig.options = parsedUrl.options;
 
-    // The pg-connection-string type definition isn't correct, as parsedUrl.ssl
-    // can absolutely be an Object, this is to work around these incorrect
-    // types, including the casting of parsedUrl.ssl to Record<string, any>
+    // The parser's types omit the TLS options object it returns for certificate
+    // paths. Keep the certificate material, but apply our verification policy below.
     if (typeof parsedUrl.ssl === 'boolean') {
       baseConfig.ssl = parsedUrl.ssl;
-    } else if (typeof parsedUrl.ssl === 'object' && !Array.isArray(parsedUrl.ssl) && parsedUrl.ssl !== null) {
-      /** @type {Record<string, unknown>} */
-      const sslOptions = parsedUrl.ssl;
-      baseConfig.ssl = {};
-
-      baseConfig.ssl.cert = sslOptions.cert;
-      baseConfig.ssl.key = sslOptions.key;
-      baseConfig.ssl.ca = sslOptions.ca;
-      baseConfig.ssl.rejectUnauthorized = sslOptions.rejectUnauthorized;
+    }
+    if (urlCertificateOptions || (typeof parsedUrl.ssl === 'object' && !Array.isArray(parsedUrl.ssl) && parsedUrl.ssl !== null)) {
+      const sslOptions = urlCertificateOptions ?? /** @type {import('node:tls').ConnectionOptions} */ (parsedUrl.ssl);
+      if (typeof sslOptions.ca === 'string' && sslOptions.ca.trim() === '') {
+        throw new Error('Invalid sslrootcert in DATABASE_URL; CA file is empty');
+      }
+      baseConfig.ssl = {
+        cert: sslOptions.cert,
+        key: sslOptions.key,
+        ca: sslOptions.ca,
+      };
+    } else if (parsedUrl.ssl === 'no-verify') {
+      urlSslMode ??= 'no-verify';
     }
 
     // Support overriding the database password in the connection URL
@@ -85,23 +113,51 @@ export function configFromEnv(env, environment) {
     throw new Error('Unable to resolve postgresql database configuration.');
   }
 
-  if (env.DB_SSLMODE !== undefined) {
-    switch (env.DB_SSLMODE) {
-    case 'disable':
-    case '':
-      baseConfig.ssl = false;
-      break;
-    case 'no-verify':
-      baseConfig.ssl = { rejectUnauthorized: false };
-      break;
-    default:
-      baseConfig.ssl = {};
-      break;
+  // Check explicit CA paths even when TLS is disabled: a typo must not silently
+  // become a different trust configuration when TLS is subsequently enabled.
+  let rootCert;
+  if (env.DB_SSLROOTCERT !== undefined) {
+    try {
+      if (env.DB_SSLROOTCERT === '') throw new Error('expected a non-empty file path');
+      rootCert = readFileSync(env.DB_SSLROOTCERT, 'utf8');
+      if (rootCert.trim() === '') throw new Error('CA file is empty');
+    } catch (error) {
+      throw new Error(`Unable to read DB_SSLROOTCERT ${JSON.stringify(env.DB_SSLROOTCERT)}; provide a readable PEM CA file`, { cause: error });
     }
-  } else if (baseConfig.ssl === undefined) {
-    // Match config/database.yml: database connections use TLS unless explicitly
-    // opted out, including when DATABASE_URL omits an SSL mode.
-    baseConfig.ssl = {};
+  }
+
+  // Reject unknown URL modes even if DB_SSLMODE overrides them, so configuration
+  // mistakes cannot silently change the verification policy.
+  const validModes = ['disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full', 'no-verify'];
+  if (urlSslMode !== undefined && !validModes.includes(urlSslMode)) {
+    throw new Error(`Invalid sslmode in DATABASE_URL: ${JSON.stringify(urlSslMode)}`);
+  }
+
+  const sslMode = env.DB_SSLMODE ?? urlSslMode ?? (baseConfig.ssl === false ? 'disable' : 'require');
+  const sslOptions = typeof baseConfig.ssl === 'object' ? baseConfig.ssl : {};
+  switch (sslMode) {
+  case 'disable':
+  case '':
+    baseConfig.ssl = false;
+    break;
+  case 'no-verify':
+    baseConfig.ssl = { ...sslOptions, rejectUnauthorized: false };
+    break;
+  case 'allow':
+  case 'prefer':
+  case 'require':
+  case 'verify-ca':
+  case 'verify-full':
+    // Preserve the existing verified-TLS behavior of these streaming modes;
+    // unlike libpq, there is no plaintext fallback or hostname-verification opt-out.
+    baseConfig.ssl = { ...sslOptions, rejectUnauthorized: true, checkServerIdentity };
+    break;
+  default:
+    throw new Error(`Invalid DB_SSLMODE: ${JSON.stringify(sslMode)}; expected ${validModes.join(', ')}`);
+  }
+
+  if (rootCert !== undefined && typeof baseConfig.ssl === 'object') {
+    baseConfig.ssl.ca = rootCert;
   }
 
   return {

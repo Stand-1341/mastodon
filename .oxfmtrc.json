@@ -18,6 +18,7 @@
 
     // Ignore config YAML files that include ERB/ruby code
     "config/email.yml",
+    "config/database.yml",
 
     // Vendored CSS
     "app/javascript/styles/mastodon/reset.scss",

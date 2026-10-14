@@ -1,10 +1,49 @@
+<%
+  require 'uri'
+
+  db_sslmode = ENV.fetch('DB_SSLMODE', 'require')
+  db_sslmodes = %w(disable allow prefer require verify-ca verify-full)
+  unless db_sslmodes.include?(db_sslmode)
+    raise ArgumentError, "Invalid DB_SSLMODE: #{db_sslmode.inspect}; expected #{db_sslmodes.join(', ')}"
+  end
+
+  db_sslrootcerts = { 'DB_SSLROOTCERT' => ENV['DB_SSLROOTCERT'] }.compact
+  db_url_parser = URI::RFC2396_Parser.new
+  %w(DATABASE_URL PRIMARY_DATABASE_URL REPLICA_DATABASE_URL).each do |name|
+    next unless ENV[name]
+
+    # Match Active Record's URL decoding: '+' is literal, not a space.
+    params = (db_url_parser.parse(ENV[name]).query || '').split('&').map { |pair| pair.split('=', 2) }.to_h
+    params.transform_values! { |value| value && db_url_parser.unescape(value) }
+    if params.key?('sslmode') && !db_sslmodes.include?(params['sslmode'])
+      raise ArgumentError, "Invalid sslmode in #{name}: #{params['sslmode'].inspect}"
+    end
+    # libpq also supports the special value 'system'; leave its handling to libpq.
+    if params.key?('sslrootcert') && params['sslrootcert'] != 'system'
+      db_sslrootcerts["#{name} sslrootcert"] = params['sslrootcert']
+    end
+  end
+
+  db_sslrootcerts.each do |source, path|
+    begin
+      raise ArgumentError, 'expected a readable file path' unless path.is_a?(String) && File.file?(path) && File.readable?(path)
+
+      File.open(path, 'rb') { |file| raise ArgumentError, 'CA file is empty' unless file.read(1) }
+    rescue SystemCallError, ArgumentError => error
+      raise ArgumentError, "Unable to read #{source} #{path.inspect}: #{error.message}; provide a readable PEM CA file"
+    end
+  end
+%>
 default: &default
   adapter: postgresql
   pool: <%= ENV["DB_POOL"] || (if Sidekiq.server? then Sidekiq.default_configuration[:concurrency] else ENV['MAX_THREADS'] end) || 5 %>
   timeout: 5000
   connect_timeout: 15
   encoding: unicode
-  sslmode: <%= ENV['DB_SSLMODE'] || "require" %>
+  sslmode: <%= db_sslmode.to_json %>
+<% if ENV['DB_SSLROOTCERT'] %>
+  sslrootcert: <%= ENV['DB_SSLROOTCERT'].to_json %>
+<% end %>
   application_name: ''
 
 development:
