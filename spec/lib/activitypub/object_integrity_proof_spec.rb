@@ -3,6 +3,8 @@
 require 'rails_helper'
 
 RSpec.describe ActivityPub::ObjectIntegrityProof do
+  include PqcKeyProvisioningHelpers
+
   describe '#verify_actor!' do
     # https://codeberg.org/fediverse/fep/src/branch/main/fep/8b32/fep-8b32.feature#L68
 
@@ -218,7 +220,11 @@ RSpec.describe ActivityPub::ObjectIntegrityProof do
     end
   end
 
-  describe 'verify_mldsa44_jcs_2024', skip: 'waiting for ubuntu-26.04 runners' do
+  describe 'verify_mldsa44_jcs_2024' do
+    before do
+      generate_real_ml_dsa_44_key
+    end
+
     # https://www.w3.org/TR/2026/WD-vc-di-quantum-resistant-1.0-20260616/#example-signed-credential-mldsa44-jcs-2024
 
     let(:keypair) do

@@ -26,7 +26,7 @@ class Multibase
   class Error < StandardError; end
 
   def self.decode(string)
-    raise Error, 'Multibase string is nil' if string.nil?
+    raise Error, 'Multibase input must be a non-empty string' unless string.is_a?(String) && string.present?
 
     case string[0]
     when 'u'
@@ -36,6 +36,8 @@ class Multibase
     else
       raise Error, 'Invalid Multibase base'
     end
+  rescue ArgumentError => e
+    raise Error, e
   end
 
   def self.decode_multicodec(string)
@@ -46,6 +48,28 @@ class Multibase
     end
 
     raise Error, 'Unknown Multicodec tag'
+  end
+
+  def self.encode_key_from_pem(pem, type:)
+    raise Error, 'Unsupported key type' unless type.to_s == 'ml-dsa-44'
+
+    match = pem.match(%r{\A-----BEGIN PUBLIC KEY-----\s+([A-Za-z0-9+/=\s]+)-----END PUBLIC KEY-----\s*\z})
+    raise Error, 'Invalid public key PEM' if match.nil?
+
+    der = Base64.strict_decode64(match[1].gsub(/\s+/, ''))
+    sequence = OpenSSL::ASN1.decode(der)
+    raise Error, 'Invalid public key DER' unless sequence.is_a?(OpenSSL::ASN1::Sequence) && sequence.value.size == 2
+
+    algorithm, public_key = sequence.value
+    unless algorithm.is_a?(OpenSSL::ASN1::Sequence) && algorithm.value.size == 1 &&
+           algorithm.value.first.is_a?(OpenSSL::ASN1::ObjectId) && algorithm.value.first.oid == '2.16.840.1.101.3.4.3.17' &&
+           public_key.is_a?(OpenSSL::ASN1::BitString) && public_key.unused_bits.zero? && public_key.value.bytesize == 1312
+      raise Error, 'Invalid ML-DSA-44 public key'
+    end
+
+    "u#{Base64.urlsafe_encode64(MULTICODEC_PREFIXES[:'mldsa-44-pub'] + public_key.value, padding: false)}"
+  rescue OpenSSL::ASN1::ASN1Error, ArgumentError => e
+    raise Error, e
   end
 
   def self.decode_key_to_pem(string)

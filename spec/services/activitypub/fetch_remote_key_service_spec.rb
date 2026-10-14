@@ -3,6 +3,8 @@
 require 'rails_helper'
 
 RSpec.describe ActivityPub::FetchRemoteKeyService do
+  include PqcKeyProvisioningHelpers
+
   subject { described_class.new }
 
   let(:webfinger) { { subject: 'acct:alice@example.com', links: [{ rel: 'self', href: 'https://example.com/alice', type: 'application/activity+json' }] } }
@@ -112,6 +114,63 @@ RSpec.describe ActivityPub::FetchRemoteKeyService do
 
       it 'returns nil' do
         expect(keypair).to be_nil
+      end
+    end
+  end
+
+  context 'with published ML-DSA-44 Multikeys' do
+    let(:public_key_id) { 'https://example.com/alice#ml-dsa-44-0123456789abcdef' }
+    let(:ml_dsa_public_key) { synthetic_ml_dsa_44_public_key }
+    let(:published_key) do
+      key = Keypair.new(
+        account: Account.new(username: 'alice', domain: 'example.com', uri: 'https://example.com/alice'),
+        uri: public_key_id,
+        type: :'ml-dsa-44',
+        public_key: ml_dsa_public_key
+      )
+      serialized_record_json(key, ActivityPub::MultikeySerializer, adapter: ActivityPub::Adapter)
+    end
+    let(:actor) do
+      {
+        '@context': ['https://www.w3.org/ns/activitystreams', 'https://www.w3.org/ns/cid/v1'],
+        id: 'https://example.com/alice',
+        type: 'Person',
+        preferredUsername: 'alice',
+        inbox: 'https://example.com/alice/inbox',
+        assertionMethod: [published_key.except('@context')],
+      }
+    end
+
+    before do
+      stub_request(:get, public_key_id).to_return(body: actor.to_json, headers: { 'Content-Type': 'application/activity+json' })
+    end
+
+    it 'fetches the actor fragment and stores the embedded public ML-DSA-44 key' do
+      key = subject.call(public_key_id, suppress_errors: false)
+
+      expect(key).to have_attributes(uri: public_key_id, type: 'ml-dsa-44', public_key: ml_dsa_public_key, private_key: nil)
+      expect(key.account.uri).to eq('https://example.com/alice')
+    end
+
+    context 'with native ML-DSA-44 support' do
+      let(:native_key) { generate_real_ml_dsa_44_key }
+      let(:ml_dsa_public_key) { native_key.public_to_pem }
+
+      it 'fetches the published public key without losing native key material' do
+        key = subject.call(public_key_id, suppress_errors: false)
+
+        expect(OpenSSL::PKey.read(key.public_key).public_to_der).to eq(native_key.public_to_der)
+        expect(key.private_key).to be_nil
+      end
+    end
+
+    context 'when fetching a standalone Multikey document' do
+      before do
+        stub_request(:get, public_key_id).to_return(body: published_key.to_json, headers: { 'Content-Type': 'application/activity+json' })
+      end
+
+      it 'recognizes the CID context and confirms actor ownership through assertionMethod' do
+        expect(subject.call(public_key_id, suppress_errors: false)).to have_attributes(uri: public_key_id, type: 'ml-dsa-44', public_key: ml_dsa_public_key)
       end
     end
   end
@@ -227,6 +286,171 @@ RSpec.describe ActivityPub::FetchRemoteKeyService do
 
         it 'returns nil' do
           expect(keypair).to be_nil
+        end
+      end
+
+      context 'with a cached actor' do
+        let!(:cached_actor) { Fabricate(:account, uri: actor[:id], domain: 'example.com', username: 'alice', keypairs: []) }
+        let!(:cached_key) { Fabricate(:keypair, account: cached_actor, uri: rsa_key_id, public_key: rsa_key_pem) }
+
+        before do
+          stub_request(:get, rsa_key_id).to_return(body: actor.to_json, headers: { 'Content-Type': 'application/activity+json' })
+        end
+
+        it 'keeps the freshness shortcut for a known usable key' do
+          allow(ActivityPub::FetchRemoteActorService).to receive(:new).and_call_original
+
+          expect(subject.call(rsa_key_id, suppress_errors: false)).to eq(cached_key)
+          expect(ActivityPub::FetchRemoteActorService).to_not have_received(:new)
+        end
+
+        context 'when the requested key is missing' do
+          let(:cached_key) { nil }
+
+          it 'processes the prefetched actor even though its cached profile is fresh' do
+            expect(cached_actor).to_not be_possibly_stale
+            expect(subject.call(rsa_key_id, suppress_errors: false))
+              .to have_attributes(account_id: cached_actor.id, uri: rsa_key_id, public_key: rsa_key_pem)
+          end
+        end
+
+        context 'when the requested key is unusable' do
+          before { cached_key.update!(revoked: true) }
+
+          it 'processes the prefetched actor and replaces the unusable authorization' do
+            expect(cached_actor).to_not be_possibly_stale
+            expect(subject.call(rsa_key_id, suppress_errors: false)).to be_usable
+            expect(cached_key.reload).to_not be_revoked
+          end
+
+          context 'when the cached key has expired instead' do
+            before { cached_key.update!(revoked: false, expires_at: 1.hour.ago) }
+
+            it 'refreshes its lifecycle metadata' do
+              expect(subject.call(rsa_key_id, suppress_errors: false)).to be_usable
+              expect(cached_key.reload.expires_at).to be_nil
+            end
+          end
+        end
+
+        it 'forces processing of an otherwise fresh actor when requested' do
+          key = subject.call(rsa_key_id, suppress_errors: false, force_refresh: true)
+
+          expect(key).to eq(cached_key)
+          expect(cached_actor.reload.keypairs.map(&:uri)).to contain_exactly(rsa_key_id, ed25519_key_id)
+        end
+
+        context 'when the actor no longer publishes the key' do
+          let(:actor_rsa_key) { nil }
+
+          it 'deletes the old authorization on an explicit refresh' do
+            expect(subject.call(rsa_key_id, suppress_errors: false, force_refresh: true)).to be_nil
+            expect(cached_actor.keypairs.exists?(uri: rsa_key_id)).to be false
+          end
+
+          context 'when the cached actor is stale' do
+            before { cached_actor.update!(last_webfingered_at: 1.week.ago) }
+
+            it 'deletes the old authorization without an explicit force flag' do
+              expect(subject.call(rsa_key_id, suppress_errors: false)).to be_nil
+              expect(cached_actor.keypairs.exists?(uri: rsa_key_id)).to be false
+            end
+          end
+
+          context 'when the standalone key still claims the actor as its controller' do
+            let(:rsa_key_id) { 'https://example.com/alice-public-key.json' }
+
+            before do
+              stub_request(:get, rsa_key_id).to_return(body: rsa_multikey.merge('@context': ['https://www.w3.org/ns/cid/v1']).to_json, headers: { 'Content-Type': 'application/activity+json' })
+            end
+
+            it 'prunes the withdrawn key before rejecting its claimed authorization' do
+              expect(subject.call(rsa_key_id, force_refresh: true)).to be_nil
+              expect(cached_actor.keypairs.exists?(uri: rsa_key_id)).to be false
+            end
+          end
+        end
+
+        context 'when the actor publishes a revoked key' do
+          let(:actor_rsa_key) { rsa_multikey.merge(revoked: '2025-01-01T00:00:00Z') }
+
+          it 'persists revocation and does not return the key as usable' do
+            expect(subject.call(rsa_key_id, suppress_errors: false, force_refresh: true)).to be_nil
+            expect(cached_key.reload).to be_revoked
+          end
+        end
+
+        context 'when the actor publishes an expired key' do
+          let(:actor_rsa_key) { rsa_multikey.merge(expires: '2025-01-01T00:00:00Z') }
+
+          it 'persists expiry and does not return the key as usable' do
+            expect(subject.call(rsa_key_id, suppress_errors: false, force_refresh: true)).to be_nil
+            expect(cached_key.reload.expires_at).to eq(Time.iso8601('2025-01-01T00:00:00Z'))
+            expect(cached_key).to_not be_usable
+          end
+        end
+
+        context 'when the actor publishes a future expiry' do
+          let(:actor_rsa_key) { rsa_multikey.merge(expires: 1.day.from_now.iso8601) }
+
+          it 'returns the usable key with its expiry intact' do
+            expect(subject.call(rsa_key_id, suppress_errors: false, force_refresh: true))
+              .to have_attributes(expires_at: Time.iso8601(actor_rsa_key[:expires]))
+          end
+        end
+
+        context 'when lifecycle metadata is malformed' do
+          let(:actor_rsa_key) { rsa_multikey.merge(revoked: 'not-a-date') }
+
+          it 'removes the previous authorization rather than retaining the cached key' do
+            expect(subject.call(rsa_key_id, suppress_errors: false, force_refresh: true)).to be_nil
+            expect(cached_actor.keypairs.exists?(uri: rsa_key_id)).to be false
+          end
+        end
+
+        context 'when the embedded controller URI does not match the actor' do
+          let(:actor_rsa_key) { rsa_multikey.merge(controller: 'https://example.com/bob') }
+
+          it 'does not retain the cached key authorization' do
+            expect(subject.call(rsa_key_id, suppress_errors: false, force_refresh: true)).to be_nil
+            expect(cached_actor.keypairs.exists?(uri: rsa_key_id)).to be false
+          end
+        end
+
+        context 'when the key is only published for authentication' do
+          let(:actor) { super().merge(assertionMethod: [ed25519_multikey], authentication: [rsa_multikey]) }
+
+          it 'does not trust the fetched key for assertions' do
+            expect(subject.call(rsa_key_id, suppress_errors: false, force_refresh: true)).to be_nil
+            expect(cached_actor.keypairs.exists?(uri: rsa_key_id)).to be false
+          end
+        end
+      end
+
+      context 'when a standalone key claims an invalid controller URI' do
+        let(:rsa_key_id) { 'https://example.com/alice-public-key.json' }
+
+        before do
+          stub_request(:get, rsa_key_id).to_return(body: rsa_multikey.merge(controller: 'file:///etc/passwd', '@context': ['https://www.w3.org/ns/cid/v1']).to_json, headers: { 'Content-Type': 'application/activity+json' })
+        end
+
+        it 'rejects the controller before fetching it' do
+          expect { subject.call(rsa_key_id, suppress_errors: false) }
+            .to raise_error(described_class::Error, /Invalid actor URI/)
+        end
+      end
+
+      context 'when a standalone controller URI returns a different actor' do
+        let(:rsa_key_id) { 'https://example.com/alice-public-key.json' }
+
+        before do
+          stub_request(:get, rsa_key_id).to_return(body: rsa_multikey.merge(controller: 'https://example.com/bob', '@context': ['https://www.w3.org/ns/cid/v1']).to_json, headers: { 'Content-Type': 'application/activity+json' })
+          stub_request(:get, 'https://example.com/bob').to_return(body: actor.to_json, headers: { 'Content-Type': 'application/activity+json' })
+        end
+
+        it 'does not trust the mismatched actor document' do
+          expect { subject.call(rsa_key_id, suppress_errors: false, force_refresh: true) }
+            .to raise_error(described_class::Error, /Unable to fetch actor JSON/)
         end
       end
 

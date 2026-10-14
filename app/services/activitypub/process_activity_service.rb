@@ -63,7 +63,13 @@ class ActivityPub::ProcessActivityService < BaseService
       # normalize the JSON-LD documents (for instance, previous Mastodon
       # versions), so skip redistribution if we can't get a safe document.
       patch_for_forwarding!(original_json, @json)
-      @json.delete('signature') unless safe_for_forwarding?(original_json, @json)
+      if safe_for_forwarding?(original_json, @json)
+        # JCS proofs bind the original context and JSON representation, unlike
+        # RDF-based RSA signatures. Forward only the checked original document.
+        @json = original_json if original_json['proof'].is_a?(Hash)
+      else
+        @json.delete('signature')
+      end
     end
 
     activity = ActivityPub::Activity.factory(@json, @account, **@options)
@@ -97,10 +103,12 @@ class ActivityPub::ProcessActivityService < BaseService
   end
 
   def actor_from_verified_object_integrity_proof(original_json)
-    return unless original_json['proof'].present? && original_json['actor'] == @json['actor']
-    return if domain_not_allowed?(@json['proof']['verificationMethod'])
+    proof = original_json['proof']
+    return unless proof.is_a?(Hash) && original_json['actor'] == @json['actor']
+    return unless proof['verificationMethod'].is_a?(String)
+    return if domain_not_allowed?(proof['verificationMethod'])
 
     # Verification is done on the original JSON without a signature
-    ActivityPub::ObjectIntegrityProof.new(original_json.without('signature')).verify_actor!
+    ActivityPub::ObjectIntegrityProof.new(original_json.without('signature')).verify_actor!(force_key_refresh: @json['type'] == 'Update')
   end
 end

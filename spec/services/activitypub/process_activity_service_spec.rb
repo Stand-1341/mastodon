@@ -102,6 +102,7 @@ RSpec.describe ActivityPub::ProcessActivityService do
           'type' => 'DataIntegrityProof',
           'proofPurpose' => 'assertionMethod',
           'cryptosuite' => 'eddsa-jcs-2022',
+          'verificationMethod' => actor.keypair.full_uri,
         }
 
         signature_double = instance_double(ActivityPub::ObjectIntegrityProof, verify_actor!: actor)
@@ -135,6 +136,7 @@ RSpec.describe ActivityPub::ProcessActivityService do
           'type' => 'DataIntegrityProof',
           'proofPurpose' => 'assertionMethod',
           'cryptosuite' => 'eddsa-jcs-2022',
+          'verificationMethod' => actor.keypair.full_uri,
         }
 
         ld_sig_double = instance_double(ActivityPub::LinkedDataSignature, verify_actor!: nil)

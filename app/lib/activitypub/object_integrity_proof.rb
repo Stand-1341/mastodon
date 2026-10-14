@@ -5,18 +5,21 @@ class ActivityPub::ObjectIntegrityProof
   include JsonLdHelper
 
   SUPPORTED_CRYPTOSUITES = %w(eddsa-jcs-2022 mldsa44-jcs-2024).freeze
+  CONTEXT = 'https://w3id.org/security/data-integrity/v2'
 
   def initialize(json)
-    @json = json
+    @json = json.is_a?(Hash) ? json.deep_stringify_keys : json
   end
 
-  def verify_actor!(proof_purpose: 'assertionMethod')
+  def verify_actor!(proof_purpose: 'assertionMethod', force_key_refresh: false)
     return unless @json.is_a?(Hash) && @json['proof'].is_a?(Hash)
 
     proof = @json['proof']
     return unless proof['type'] == 'DataIntegrityProof' && proof['verificationMethod'].present? && proof['proofPurpose'] == proof_purpose
 
-    return if proof['expires']&.to_datetime&.past?
+    return unless %w(type cryptosuite verificationMethod proofPurpose proofValue).all? { |field| proof[field].is_a?(String) && proof[field].present? }
+    return if proof.key?('created') && (!proof['created'].is_a?(String) || !Time.iso8601(proof['created']))
+    return if proof.key?('expires') && (!proof['expires'].is_a?(String) || Time.iso8601(proof['expires']).past?)
 
     cryptosuite = proof['cryptosuite']
     key_uri = proof['verificationMethod']
@@ -24,7 +27,11 @@ class ActivityPub::ObjectIntegrityProof
     return unless SUPPORTED_CRYPTOSUITES.include?(cryptosuite) && proof['proofValue'].present?
 
     keypair = Keypair.from_keyid(key_uri)
-    keypair = ActivityPub::FetchRemoteKeyService.new.call(key_uri) if keypair&.public_key.blank?
+    if keypair&.public_key.blank?
+      keypair = ActivityPub::FetchRemoteKeyService.new.call(key_uri)
+    elsif keypair.actor.remote? && (force_key_refresh || @json['type'] == 'Update' || keypair.actor.possibly_stale?)
+      keypair = ActivityPub::FetchRemoteKeyService.new.call(key_uri, force_refresh: true)
+    end
     return if keypair.nil? || !keypair.usable?
 
     case cryptosuite
@@ -37,8 +44,36 @@ class ActivityPub::ObjectIntegrityProof
 
       keypair.actor if ActivityPub::ObjectIntegrityProof.verify_mldsa44_jcs_2024(@json, keypair.keypair)
     end
-  rescue Multibase::Error, OpenSSL::PKey::PKeyError
+  rescue Multibase::Error, OpenSSL::PKey::PKeyError, ArgumentError, NotImplementedError
     false
+  end
+
+  def sign!(creator, sign_with: nil, expires_in: 2.days)
+    key = sign_with || creator.keypair(type: :'ml-dsa-44')
+    raise ArgumentError, 'A usable local ML-DSA-44 private key owned by the signer is required' unless creator.local? && key&.account == creator && key.type == 'ml-dsa-44' && key.usable? && key.private_key.present?
+    raise ArgumentError, 'Refusing to replace an existing proof or signature' if @json.key?('proof') || @json.key?('signature')
+
+    document = @json.deep_dup
+    document['@context'] = (Array(document['@context']) + [CONTEXT]).uniq
+    expires_at = expires_in.from_now.utc
+    expires_at = [expires_at, key.expires_at].min if key.expires_at.present?
+    raise ArgumentError, 'Proof expiration must be in the future' unless expires_at.future?
+
+    options = {
+      'type' => 'DataIntegrityProof',
+      'cryptosuite' => 'mldsa44-jcs-2024',
+      'created' => Time.now.utc.iso8601,
+      'expires' => expires_at.iso8601,
+      'verificationMethod' => key.full_uri,
+      'proofPurpose' => 'assertionMethod',
+    }
+
+    # The ML-DSA suite binds the document's final context in the proof configuration.
+    proof_config = options.merge('@context' => document['@context']).to_json_c14n
+    to_be_signed = Digest::SHA256.digest(proof_config) + Digest::SHA256.digest(document.to_json_c14n)
+    signature = key.keypair.sign(nil, to_be_signed)
+
+    document.merge('proof' => options.merge('proofValue' => "u#{Base64.urlsafe_encode64(signature, padding: false)}"))
   end
 
   # https://www.w3.org/TR/vc-di-eddsa/#verify-proof-eddsa-jcs-2022

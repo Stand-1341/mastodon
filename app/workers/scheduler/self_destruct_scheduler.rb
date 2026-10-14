@@ -54,7 +54,7 @@ class Scheduler::SelfDestructScheduler
   end
 
   def delete_account!(account)
-    json = ActivityPub::LinkedDataSignature
+    json = ActivityPub::PqcSigning
       .new(deletion_payload(account))
       .sign!(account)
       .to_json

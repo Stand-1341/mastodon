@@ -4,6 +4,21 @@ require 'json'
 require 'openssl'
 
 namespace :pqc do
+  desc 'Provision an ML-DSA-44 key for one local account (idempotent; does not enable signing)'
+  task :generate_key, [:username] => :environment do |_task, args|
+    username = args[:username].to_s.strip.delete_prefix('@')
+    abort 'Usage: rake pqc:generate_key[username] (one local username required)' if username.blank?
+    abort 'Only local accounts can be provisioned; supply a username without a domain' if username.include?('@')
+
+    account = Account.find_local(username)
+    abort "Local account #{username.inspect} not found; remote accounts cannot be provisioned" if account.nil?
+
+    keypair = ActivityPub::GeneratePqcKeyService.new.call(account)
+    puts "ML-DSA-44 key available for @#{account.username}: #{keypair.full_uri}"
+  rescue ActivityPub::GeneratePqcKeyService::UnsupportedRuntimeError => e
+    abort e.message
+  end
+
   desc 'Emit a machine-readable PQC deployment inventory baseline'
   task inventory: :environment do
     encryption_key_names = %w(
@@ -41,6 +56,11 @@ namespace :pqc do
       openssl_version: OpenSSL::OPENSSL_VERSION,
       openssl_library_version: OpenSSL.const_defined?(:OPENSSL_LIBRARY_VERSION) ? OpenSSL::OPENSSL_LIBRARY_VERSION : nil,
       database_sslmode: database_configuration['sslmode'] || database_configuration[:sslmode],
+      activitypub: {
+        pqc_signing_enabled: ENV['PQC_ACTIVITYPUB_SIGNING'] == 'true',
+        key_provisioning: 'explicit_per_account',
+        public_key_publication: 'usable_keys_regardless_of_signing',
+      },
       media_backend: {
         storage: storage.to_s,
         provider: storage_provider.to_s,

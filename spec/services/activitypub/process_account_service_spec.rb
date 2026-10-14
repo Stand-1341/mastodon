@@ -387,6 +387,226 @@ RSpec.describe ActivityPub::ProcessAccountService do
     end
   end
 
+  context 'with remote key lifecycle metadata' do
+    let!(:alice) { Fabricate(:account, uri: 'https://foo.test/actor', domain: 'foo.test', username: 'alice', keypairs: []) }
+    let!(:existing_key) { Fabricate(:keypair, account: alice, uri: key_id) }
+    let(:key_id) { 'https://foo.test/actor#lifecycle-key' }
+    let(:metadata) { {} }
+    let(:key_document) { key_data.merge(metadata).deep_stringify_keys }
+    let(:published_key) { key_document }
+    let(:payload) do
+      {
+        'id' => alice.uri,
+        'type' => 'Person',
+        'inbox' => 'https://foo.test/inbox',
+        'preferredUsername' => 'alice',
+        key_field => published_key,
+      }
+    end
+
+    shared_examples 'authoritative key lifecycle ingestion' do
+      it 'clears lifecycle metadata omitted from the refreshed key' do
+        existing_key.update!(expires_at: 1.hour.ago, revoked: true)
+
+        subject.call(payload, only_key: true, suppress_errors: false)
+
+        expect(existing_key.reload).to have_attributes(expires_at: nil, revoked: false)
+        expect(existing_key).to be_usable
+      end
+
+      it 'deletes a key omitted from the authoritative actor' do
+        subject.call(payload.except(key_field), only_key: true, suppress_errors: false)
+
+        expect(alice.keypairs.exists?(uri: key_id)).to be false
+      end
+
+      context 'with a future expiry' do
+        let(:metadata) { { expires: 1.day.from_now.iso8601 } }
+
+        it 'persists expiry without dropping usable key material' do
+          subject.call(payload, only_key: true, suppress_errors: false)
+
+          expect(existing_key.reload.expires_at).to eq(Time.iso8601(metadata[:expires]))
+          expect(existing_key).to be_usable
+        end
+      end
+
+      context 'with an expired key' do
+        let(:metadata) { { expires: '2025-01-01T12:34:56.123456+02:00' } }
+
+        it 'persists the timestamp in UTC and makes the key unusable' do
+          subject.call(payload, only_key: true, suppress_errors: false)
+
+          expect(existing_key.reload.expires_at).to eq(Time.iso8601(metadata[:expires]).utc)
+          expect(existing_key).to_not be_usable
+          expect(alice.keypairs.usable.exists?(uri: key_id)).to be false
+        end
+      end
+
+      context 'with a revoked key' do
+        let(:metadata) { { revoked: '2025-01-01T12:34:56Z' } }
+
+        it 'persists revocation and makes the key unusable' do
+          subject.call(payload, only_key: true, suppress_errors: false)
+
+          expect(existing_key.reload).to be_revoked
+          expect(existing_key).to_not be_usable
+          expect(alice.keypairs.usable.exists?(uri: key_id)).to be false
+        end
+      end
+
+      context 'with both lifecycle fields' do
+        let(:metadata) { { expires: 1.day.from_now.iso8601, revoked: '2025-01-01T12:34:56Z' } }
+
+        it 'stores expiry and revocation together' do
+          subject.call(payload, only_key: true, suppress_errors: false)
+
+          expect(existing_key.reload).to have_attributes(expires_at: Time.iso8601(metadata[:expires]), revoked: true)
+        end
+      end
+
+      invalid_dates = [nil, '', 'yesterday', '2025-01-01', '2025-01-01T12:34:56', '2025-02-30T12:34:56Z', '2025-01-01T25:00:00Z', '2025-01-01T12:60:00Z', '2025-01-01T12:34:56+25:00', '2025-01-01T12:34:56Z trailing', 123, true, false, [], {}]
+      %i(expires revoked).each do |field|
+        invalid_dates.each do |invalid_date|
+          context "with malformed #{field} #{invalid_date.inspect}" do
+            let(:metadata) { { field => invalid_date } }
+
+            it 'ignores the malformed key and deletes its old authorization' do
+              subject.call(payload, only_key: true, suppress_errors: false)
+
+              expect(alice.keypairs.exists?(uri: key_id)).to be false
+            end
+          end
+        end
+      end
+
+      it 'reprocesses lifecycle metadata when the service instance is reused' do
+        subject.call(payload, only_key: true, suppress_errors: false)
+
+        key_document['revoked'] = '2025-01-01T12:34:56Z'
+        stub_request(:get, key_id).to_return(body: key_document.to_json, headers: { 'Content-Type': 'application/activity+json' }) if published_key.is_a?(String)
+        subject.call(payload, only_key: true, suppress_errors: false)
+
+        expect(existing_key.reload).to be_revoked
+      end
+    end
+
+    shared_examples 'embedded lifecycle restrictions on external keys' do
+      let(:published_key) { key_data.merge(expires: '2030-01-01T00:00:00Z', revoked: '2025-01-01T00:00:00Z').deep_stringify_keys }
+
+      it 'preserves restrictions published by the actor when fetching external key material' do
+        subject.call(payload, only_key: true, suppress_errors: false)
+
+        expect(existing_key.reload).to have_attributes(expires_at: Time.iso8601('2030-01-01T00:00:00Z'), revoked: true)
+      end
+
+      context 'when the external key document publishes an earlier expiry' do
+        let(:metadata) { { expires: '2025-01-01T00:00:00Z' } }
+
+        it 'keeps the stricter expiry and the actor revocation' do
+          subject.call(payload, only_key: true, suppress_errors: false)
+
+          expect(existing_key.reload).to have_attributes(expires_at: Time.iso8601(metadata[:expires]), revoked: true)
+        end
+      end
+
+      context 'when the external key document has malformed lifecycle metadata' do
+        let(:metadata) { { expires: 'not-a-date' } }
+
+        it 'removes old authorization even if the actor publishes valid lifecycle metadata' do
+          subject.call(payload, only_key: true, suppress_errors: false)
+
+          expect(alice.keypairs.exists?(uri: key_id)).to be false
+        end
+      end
+    end
+
+    context 'with legacy RSA keys' do
+      let(:key_field) { 'publicKey' }
+      let(:key_data) { { id: key_id, owner: alice.uri, publicKeyPem: 'foo' } }
+
+      context 'when embedded in the actor' do
+        it_behaves_like 'authoritative key lifecycle ingestion'
+      end
+
+      context 'when fetched from a separate document' do
+        let(:key_id) { 'https://foo.test/keys/lifecycle-key' }
+        let(:published_key) { key_id }
+
+        before do
+          stub_request(:get, key_id).to_return(body: key_document.to_json, headers: { 'Content-Type': 'application/activity+json' })
+        end
+
+        it_behaves_like 'authoritative key lifecycle ingestion'
+        it_behaves_like 'embedded lifecycle restrictions on external keys'
+      end
+    end
+
+    context 'with Multikeys' do
+      let(:key_field) { 'assertionMethod' }
+      let(:key_data) do
+        {
+          id: key_id,
+          type: 'Multikey',
+          controller: alice.uri,
+          publicKeyMultibase: 'z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK',
+        }
+      end
+
+      context 'when embedded in the actor' do
+        it_behaves_like 'authoritative key lifecycle ingestion'
+
+        context 'when the controller URI does not match the actor' do
+          let(:key_document) { super().merge('controller' => 'https://foo.test/bob') }
+
+          it 'removes the old key rather than trusting an unrelated controller' do
+            subject.call(payload, only_key: true, suppress_errors: false)
+
+            expect(alice.keypairs.exists?(uri: key_id)).to be false
+          end
+        end
+
+        it 'does not ingest keys outside assertionMethod' do
+          subject.call(payload.except(key_field).merge('authentication' => key_document), only_key: true, suppress_errors: false)
+
+          expect(alice.keypairs.exists?(uri: key_id)).to be false
+        end
+      end
+
+      context 'when fetched from a separate document' do
+        let(:key_id) { 'https://foo.test/keys/lifecycle-key' }
+        let(:published_key) { key_id }
+
+        before do
+          stub_request(:get, key_id).to_return(body: key_document.to_json, headers: { 'Content-Type': 'application/activity+json' })
+        end
+
+        it_behaves_like 'authoritative key lifecycle ingestion'
+        it_behaves_like 'embedded lifecycle restrictions on external keys'
+
+        context 'when the fetched controller URI does not match the actor' do
+          let(:key_document) { super().merge('controller' => 'https://foo.test/bob') }
+
+          it 'removes the old key rather than trusting an unrelated controller' do
+            subject.call(payload, only_key: true, suppress_errors: false)
+
+            expect(alice.keypairs.exists?(uri: key_id)).to be false
+          end
+        end
+
+        context 'when the fetched key ID does not match its URI' do
+          let(:key_document) { super().merge('id' => 'https://foo.test/keys/other-key') }
+
+          it 'rejects the mismatched document and removes the old authorization' do
+            subject.call(payload, only_key: true, suppress_errors: false)
+
+            expect(alice.keypairs.exists?(uri: key_id)).to be false
+          end
+        end
+      end
+    end
+  end
+
   context 'with an account that has changed URI but not handle (typically, losing Mastodon database)' do
     let!(:account) { Fabricate(:remote_account, username: 'alice', domain: 'example.com', uri: 'https://example.com/users/alice') }
 

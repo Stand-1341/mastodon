@@ -246,10 +246,89 @@ RSpec.describe Account do
   end
 
   describe '#keypair' do
+    include PqcKeyProvisioningHelpers
+
     it 'returns a Keypair object with a RSA key pair' do
       account = Fabricate(:account)
       expect(account.keypair).to be_instance_of Keypair
       expect(account.keypair.keypair).to be_instance_of OpenSSL::PKey::RSA
+    end
+
+    context 'with a local legacy RSA account and an ML-DSA-44 row' do
+      let(:account) { Fabricate(:account, legacy_keypair: true) }
+      let!(:pqc_key) { Fabricate(:keypair, account: account, type: :'ml-dsa-44', public_key: synthetic_ml_dsa_44_public_key) }
+
+      it 'defaults to the legacy RSA key instead of the stored ML-DSA key' do
+        key = account.keypair
+
+        expect(key).to have_attributes(type: 'rsa', public_key: account.public_key, private_key: account.private_key)
+        expect(key).to be_new_record
+        expect(key.full_uri).to eq(ActivityPub::TagManager.instance.key_uri_for(account))
+        expect(key.keypair).to be_instance_of(OpenSSL::PKey::RSA)
+      end
+
+      it 'retains explicit ML-DSA key selection' do
+        expect(account.keypair(type: :'ml-dsa-44')).to eq(pqc_key)
+      end
+
+      it 'continues producing signatures verifiable with the legacy RSA public key' do
+        payload = 'legacy RSA signature after ML-DSA provisioning'
+        signature = account.keypair.keypair.sign(OpenSSL::Digest.new('SHA256'), payload)
+
+        expect(OpenSSL::PKey::RSA.new(account.public_key).verify(OpenSSL::Digest.new('SHA256'), signature, payload)).to be true
+      end
+
+      context 'when a usable RSA row is newer than the ML-DSA row' do
+        let!(:rsa_key) { Fabricate(:keypair, account: account, type: :rsa) }
+
+        it 'defaults to the oldest usable RSA row rather than the oldest row of any type' do
+          Fabricate(:keypair, account: account, type: :rsa)
+
+          expect(account.keypair).to eq(rsa_key)
+          expect(account.keypair(type: :rsa)).to eq(rsa_key)
+          expect(account.keypair(type: :'ml-dsa-44')).to eq(pqc_key)
+        end
+
+        it 'falls back to legacy RSA when the stored RSA key is revoked' do
+          rsa_key.update!(revoked: true)
+
+          expect(account.keypair).to have_attributes(type: 'rsa', public_key: account.public_key)
+          expect(account.keypair).to be_new_record
+        end
+
+        it 'falls back to legacy RSA when the stored RSA key has expired' do
+          rsa_key.update!(expires_at: 1.minute.ago)
+
+          expect(account.keypair).to have_attributes(type: 'rsa', public_key: account.public_key)
+          expect(account.keypair).to be_new_record
+        end
+      end
+
+      it 'retains explicit Ed25519 key selection' do
+        ed25519_key = Fabricate(:keypair, account: account, type: :ed25519)
+
+        expect(account.keypair(type: :ed25519)).to eq(ed25519_key)
+        expect(account.keypair.type).to eq('rsa')
+      end
+    end
+
+    context 'with a remote account and mixed key types' do
+      let(:account) { Fabricate(:remote_account, legacy_keypair: true) }
+      let!(:ed25519_key) { Fabricate(:keypair, account: account, type: :ed25519) }
+      let!(:pqc_key) { Fabricate(:keypair, account: account, type: :'ml-dsa-44', public_key: synthetic_ml_dsa_44_public_key) }
+      let!(:rsa_key) { Fabricate(:keypair, account: account, type: :rsa) }
+
+      it 'preserves default selection of the oldest usable remote key regardless of type' do
+        expect(account.keypair).to eq(ed25519_key)
+        expect(account.keypair(type: :rsa)).to eq(rsa_key)
+        expect(account.keypair(type: :'ml-dsa-44')).to eq(pqc_key)
+      end
+
+      it 'preserves default ML-DSA selection when earlier remote keys are unusable' do
+        ed25519_key.update!(revoked: true)
+
+        expect(account.keypair).to eq(pqc_key)
+      end
     end
   end
 

@@ -25,6 +25,7 @@ class ActivityPub::ActorSerializer < ActivityPub::Serializer
   attribute :featured_collections
 
   has_one :keypair, key: :public_key, serializer: ActivityPub::PublicKeySerializer
+  has_many :assertion_method, serializer: ActivityPub::MultikeySerializer, if: :pqc_keys?
 
   has_many :virtual_tags, key: :tag
   has_many :virtual_attachments, key: :attachment
@@ -137,8 +138,16 @@ class ActivityPub::ActorSerializer < ActivityPub::Serializer
     ImageWithDescription.new(object.header, object.header_description)
   end
 
-  def public_key
-    object
+  def keypair
+    object.keypair(type: :rsa)
+  end
+
+  def assertion_method
+    @assertion_method ||= object.keypairs.usable.where(type: :'ml-dsa-44').order(id: :asc).to_a
+  end
+
+  def pqc_keys?
+    assertion_method.any?
   end
 
   def suspended

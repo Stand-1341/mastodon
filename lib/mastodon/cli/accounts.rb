@@ -607,10 +607,17 @@ module Mastodon::CLI
     def rotate_keys_for_account(account, delay = 0)
       fail_with_message 'No such account' if account.nil?
 
-      old_key = account.keypair
       new_key = OpenSSL::PKey::RSA.new(2048)
 
-      account.update(private_key: nil, public_key: '', keypairs: [account.keypairs.build(local_fragment: '#main-key', type: :rsa, public_key: new_key.public_key.to_pem, private_key: new_key.to_pem)])
+      old_key = account.with_lock do
+        old_keypair = account.keypair(type: :rsa)
+
+        account.keypairs.where(type: :rsa).destroy_all
+        account.keypairs.create!(local_fragment: '#main-key', type: :rsa, public_key: new_key.public_key.to_pem, private_key: new_key.to_pem)
+        account.update!(private_key: nil, public_key: '')
+
+        old_keypair
+      end
 
       ActivityPub::UpdateDistributionWorker.perform_in(
         delay,
@@ -618,7 +625,7 @@ module Mastodon::CLI
         {
           'sign_with' => {
             'private_key' => old_key.private_key,
-            'local_fragment' => old_key.local_fragment,
+            'local_fragment' => old_key.local_fragment.presence || '#main-key',
             'type' => old_key.type,
           },
         }

@@ -349,6 +349,8 @@ class Account < ApplicationRecord
   end
 
   def keypair(type: nil)
+    type = :rsa if type.nil? && local?
+
     # Pick the first (oldest) keypair matching the expected type,
     # as we can expect our key rotation code to add stand-by keys with higher IDs
     # before pruning older keys with lower IDs after some time.

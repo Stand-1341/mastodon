@@ -989,6 +989,86 @@ RSpec.describe Mastodon::CLI::Accounts do
 
         expect(ActivityPub::UpdateDistributionWorker).to have_received(:perform_in).with(anything, account.id, anything).once
       end
+
+      context 'with non-RSA keys' do
+        include PqcKeyProvisioningHelpers
+
+        subject(:rotate_account) { cli.invoke(action, arguments, options) }
+
+        before do
+          Fabricate(:keypair, account: account, type: :'ml-dsa-44', public_key: synthetic_ml_dsa_44_public_key)
+          Fabricate(:keypair, account: account, type: :'ml-dsa-44', public_key: synthetic_ml_dsa_44_public_key, revoked: true)
+          Fabricate(:keypair, account: account, type: :'ml-dsa-44', public_key: synthetic_ml_dsa_44_public_key, expires_at: 1.minute.ago)
+          Fabricate(:keypair, account: account, type: :ed25519)
+        end
+
+        shared_examples 'RSA rotation preserving other keys' do
+          it 'replaces only RSA rows and preserves every non-RSA row including its encrypted private bytes' do
+            non_rsa_before = account.keypairs.where.not(type: :rsa).order(:id).map(&:attributes_before_type_cast)
+            old_rsa_ids = account.keypairs.where(type: :rsa).pluck(:id)
+            old_public_key = account.keypair(type: :rsa).public_key
+
+            expect { rotate_account }.to output_results('OK')
+            account.reload
+
+            expect(account.keypairs.where.not(type: :rsa).order(:id).map(&:attributes_before_type_cast)).to eq(non_rsa_before)
+            expect(account.keypairs.where(type: :rsa).count).to eq(1)
+            expect(Keypair.where(id: old_rsa_ids)).to be_empty
+            expect(account.keypair).to have_attributes(type: 'rsa', local_fragment: '#main-key')
+            expect(account.keypair.public_key).to_not eq(old_public_key)
+            expect(account).to have_attributes(private_key: nil, public_key: '')
+          end
+
+          it 'queues the old RSA signer with its original identifier and a working old-key signature' do
+            old_key = account.keypair(type: :rsa)
+            old_key_uri = old_key.full_uri
+            queued_options = nil
+            allow(ActivityPub::UpdateDistributionWorker).to receive(:perform_in) do |_delay, _account_id, job_options|
+              queued_options = job_options
+            end
+
+            expect { rotate_account }.to output_results('OK')
+
+            signer = Keypair.from_worker_arg(account.reload, queued_options.fetch('sign_with'))
+            payload = 'RSA rotation update signed with the previous key'
+            signature = signer.keypair.sign(OpenSSL::Digest.new('SHA256'), payload)
+
+            expect(signer).to have_attributes(type: 'rsa', private_key: old_key.private_key)
+            expect(signer.full_uri).to eq(old_key_uri)
+            expect(OpenSSL::PKey::RSA.new(old_key.public_key).verify(OpenSSL::Digest.new('SHA256'), signature, payload)).to be true
+            expect(ActivityPub::UpdateDistributionWorker).to have_received(:perform_in).with(0, account.id, queued_options).once
+          end
+
+          it 'rolls back RSA replacement and does not queue an update if saving the account fails' do
+            old_attributes = account.reload.attributes
+            keys_before = account.keypairs.order(:id).map(&:attributes_before_type_cast)
+            allow(Account).to receive(:find_local).with(account.username).and_return(account)
+            allow(account).to receive(:update!).and_raise(ActiveRecord::RecordInvalid.new(account))
+            allow(ActivityPub::UpdateDistributionWorker).to receive(:perform_in)
+
+            expect { rotate_account }.to raise_error(ActiveRecord::RecordInvalid)
+
+            expect(account.reload.attributes).to eq(old_attributes)
+            expect(account.keypairs.order(:id).map(&:attributes_before_type_cast)).to eq(keys_before)
+            expect(ActivityPub::UpdateDistributionWorker).to_not have_received(:perform_in)
+          end
+        end
+
+        context 'with stored RSA keys' do
+          before do
+            Fabricate(:keypair, account: account, type: :rsa, revoked: true)
+            Fabricate(:keypair, account: account, type: :rsa, expires_at: 1.minute.ago)
+          end
+
+          it_behaves_like 'RSA rotation preserving other keys'
+        end
+
+        context 'with only legacy RSA account fields' do
+          let(:account) { Fabricate(:account, legacy_keypair: true) }
+
+          it_behaves_like 'RSA rotation preserving other keys'
+        end
+      end
     end
 
     context 'when the given username is not found' do

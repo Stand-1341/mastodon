@@ -7,6 +7,11 @@ class ActivityPub::ProcessAccountService < BaseService
   include Lockable
 
   MAX_PUBLIC_KEYS = 10
+  KEY_LIFECYCLE_TIMESTAMP_FORMAT = /
+    \A\d{4}-\d{2}-\d{2}
+    T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?
+    (?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)\z
+  /x
   MAX_PROFILE_FIELDS = 50
   SUBDOMAINS_RATELIMIT = 10
   DISCOVERIES_PER_REQUEST = 400
@@ -29,6 +34,7 @@ class ActivityPub::ProcessAccountService < BaseService
     @uri         = @json['id']
     @account     = account
     @only_key    = only_key
+    @public_keys = nil
     @webfinger_verified = false
 
     extract_username_and_domain!
@@ -386,17 +392,23 @@ class ActivityPub::ProcessAccountService < BaseService
     as_array(@json['publicKey']).take(MAX_PUBLIC_KEYS).filter_map do |value|
       next if value.nil?
 
+      lifecycle = nil
+
       if value.is_a?(Hash)
-        next unless value['owner'] == @account.uri
+        next unless value['owner'] == @account.uri && value['id'].is_a?(String)
 
         key = value['publicKeyPem']
+        lifecycle = key_lifecycle_attributes(value)
+        next if key.blank? || lifecycle.nil?
+
         value = value['id']
 
         # Key is contained within the actor document, no need to fetch anything else
-        next { type: :rsa, public_key: key, uri: value } if value.split('#').first == @account.uri
+        next { type: :rsa, public_key: key, uri: value, **lifecycle } if value.split('#').first == @account.uri
       end
 
       key_id = value
+      next unless key_id.is_a?(String) && !unsupported_uri_scheme?(key_id)
 
       # Key is fetched without ID validation because of a GoToSocial bug
       value = fetch_resource_without_id_validation(key_id)
@@ -405,12 +417,13 @@ class ActivityPub::ProcessAccountService < BaseService
       # Special handling for GoToSocial which returns the whole actor for the key ID
       value = first_of_value(value['publicKey']) if value.is_a?(Hash) && value.key?('publicKey')
 
-      next unless value['owner'] == @account.uri
+      next unless value.is_a?(Hash) && value['owner'] == @account.uri
 
       key = value['publicKeyPem']
-      next if key.nil?
+      lifecycle = key_lifecycle_attributes(value, published_lifecycle: lifecycle)
+      next if key.blank? || lifecycle.nil?
 
-      { type: :rsa, public_key: key, uri: key_id }
+      { type: :rsa, public_key: key, uri: key_id, **lifecycle }
     end
   end
 
@@ -418,32 +431,62 @@ class ActivityPub::ProcessAccountService < BaseService
     as_array(@json['assertionMethod']).take(MAX_PUBLIC_KEYS).filter_map do |value|
       next if value.nil?
 
+      lifecycle = nil
+
       if value.is_a?(Hash)
-        next unless value['type'] == 'Multikey' && value['controller'] == @account.uri
+        next unless value['type'] == 'Multikey' && value['controller'] == @account.uri && value['id'].is_a?(String)
 
         key_type, key = key_from_multikey(value['publicKeyMultibase'])
-        next if key_type.nil?
+        lifecycle = key_lifecycle_attributes(value)
+        next if key_type.nil? || key.nil? || lifecycle.nil?
 
         value = value['id']
 
         # Key is contained within the actor document, no need to fetch anything else
-        next { type: key_type, public_key: key, uri: value } if value.split('#').first == @account.uri
+        next { type: key_type, public_key: key, uri: value, **lifecycle } if value.split('#').first == @account.uri
       end
 
       key_id = value
+      next unless key_id.is_a?(String) && !unsupported_uri_scheme?(key_id)
 
       value = fetch_resource(key_id, true)
 
-      next unless value['type'] == 'Multikey' && value['controller'] == @account.uri
+      next unless value.is_a?(Hash) && value['type'] == 'Multikey' && value['controller'] == @account.uri
 
       key_type, key = key_from_multikey(value['publicKeyMultibase'])
-      next if key_type.nil? || key.nil?
+      lifecycle = key_lifecycle_attributes(value, published_lifecycle: lifecycle)
+      next if key_type.nil? || key.nil? || lifecycle.nil?
 
-      { type: key_type, public_key: key, uri: key_id }
+      { type: key_type, public_key: key, uri: key_id, **lifecycle }
     end
   end
 
+  def key_lifecycle_attributes(value, published_lifecycle: nil)
+    expires_at = key_lifecycle_timestamp(value['expires']) if value.key?('expires')
+    revoked = value.key?('revoked')
+    key_lifecycle_timestamp(value['revoked']) if revoked
+
+    # An external key document cannot relax lifecycle restrictions published by the actor.
+    if published_lifecycle
+      expires_at = [expires_at, published_lifecycle[:expires_at]].compact.min
+      revoked ||= published_lifecycle[:revoked]
+    end
+
+    { expires_at: expires_at, revoked: revoked }
+  rescue ArgumentError
+    # Ignoring the key also removes any previously stored authorization during refresh.
+    nil
+  end
+
+  def key_lifecycle_timestamp(value)
+    raise ArgumentError unless value.is_a?(String) && KEY_LIFECYCLE_TIMESTAMP_FORMAT.match?(value)
+
+    DateTime.iso8601(value).to_time.utc
+  end
+
   def key_from_multikey(value)
+    return unless value.is_a?(String)
+
     Multibase.decode_key_to_pem(value)
   rescue Multibase::Error
     nil
