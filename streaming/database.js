@@ -1,8 +1,11 @@
 import { readFileSync } from 'node:fs';
+import process from 'node:process';
 import { checkServerIdentity } from 'node:tls';
 
 import pg from 'pg';
 import pgConnectionString from 'pg-connection-string';
+
+// Native ESM requires the extension for this in-package import.
 
 import { parseIntFromEnvValue } from './utils.js';
 
@@ -111,6 +114,16 @@ export function configFromEnv(env, environment) {
     baseConfig = pgConfigs[environment];
   } else {
     throw new Error('Unable to resolve postgresql database configuration.');
+  }
+
+  if (env.PQC_REQUIRE_HYBRID_DB_TLS === 'true') {
+    const expectedCaPath = env.PQC_HYBRID_DB_TLS_CA_PATH ?? '/run/pqc-postgres-tls/ca.crt';
+    if (env.DB_HOST !== 'db' || env.DB_SSLMODE !== 'verify-full' || env.DB_SSLROOTCERT !== expectedCaPath) {
+      throw new Error('PQC_REQUIRE_HYBRID_DB_TLS requires DB_HOST=db, DB_SSLMODE=verify-full, and the configured PostgreSQL CA');
+    }
+    if (typeof baseConfig.host !== 'string' || baseConfig.host !== 'db') {
+      throw new Error('PQC_REQUIRE_HYBRID_DB_TLS requires DATABASE_URL to connect to db');
+    }
   }
 
   // Check explicit CA paths even when TLS is disabled: a typo must not silently

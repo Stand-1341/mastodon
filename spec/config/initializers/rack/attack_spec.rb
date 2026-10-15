@@ -163,6 +163,45 @@ RSpec.describe Rack::Attack, type: :request do
     it_behaves_like 'throttled endpoint'
   end
 
+  describe 'throttle PQC message relay writes per authenticated account' do
+    include_context 'with API authentication', oauth_scopes: 'write:statuses'
+
+    let(:throttle) { 'throttle_pqc_message_relay' }
+    let(:limit) { 120 }
+    let(:period) { 5.minutes }
+    let(:path) { '/api/v1/pqc_conversations/test-token/messages' }
+    let(:request) { -> { post path, headers: headers } }
+    let(:discriminator) { user.id }
+
+    it_behaves_like 'throttled endpoint'
+  end
+
+  describe 'throttle PQC private media uploads per authenticated account' do
+    include_context 'with API authentication', oauth_scopes: 'write:media'
+
+    let(:throttle) { 'throttle_pqc_private_media_upload' }
+    let(:limit) { 10 }
+    let(:period) { 30.minutes }
+    let(:path) { '/api/v1/private_media' }
+    let(:request) { -> { post path, headers: headers } }
+    let(:discriminator) { user.id }
+
+    it_behaves_like 'throttled endpoint'
+  end
+
+  describe 'throttle PQC private media downloads per authenticated account' do
+    include_context 'with API authentication', oauth_scopes: 'write:media'
+
+    let(:throttle) { 'throttle_pqc_private_media_download' }
+    let(:limit) { 30 }
+    let(:period) { 5.minutes }
+    let(:path) { '/api/v1/private_media/1' }
+    let(:request) { -> { get path, headers: headers } }
+    let(:discriminator) { user.id }
+
+    it_behaves_like 'throttled endpoint'
+  end
+
   describe 'throttle excessive password change requests by account' do
     let(:user) { Fabricate(:user, email: 'user@host.example') }
     let(:throttle) { 'throttle_password_change/account' }

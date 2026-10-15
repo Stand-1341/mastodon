@@ -107,6 +107,24 @@ namespace :api, format: false do
     end
 
     resources :media, only: [:create, :update, :show, :destroy]
+    resources :private_media, only: [:create, :show, :destroy], controller: 'private_media'
+    resources :pqc_devices, only: [:index, :create, :destroy] do
+      patch :key_package, on: :member, action: :update_key_package
+      collection do
+        get :key_packages
+      end
+    end
+    resources :pqc_conversations, only: [:index, :create, :show], param: :token do
+      post :complete_setup, on: :member, action: :complete_setup
+      post :commit_member, on: :member, action: :commit_member
+      post :invite_member, on: :member, action: :invite_member
+      post :remove_member, on: :member, action: :remove_member
+      post :remove_device, on: :member, action: :remove_device
+      post :request_leave, on: :member, action: :request_leave
+      post :accept_invitation, on: :member, action: :accept_invitation
+      post :decline_invitation, on: :member, action: :decline_invitation
+      resources :messages, only: [:index, :create], controller: 'pqc_conversation_messages'
+    end
     resources :blocks, only: [:index]
     resources :mutes, only: [:index]
     resources :favourites, only: [:index]

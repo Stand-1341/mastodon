@@ -2702,6 +2702,61 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@hpke/chacha20poly1305@npm:1.8.0":
+  version: 1.8.0
+  resolution: "@hpke/chacha20poly1305@npm:1.8.0"
+  dependencies:
+    "@hpke/common": "npm:^1.10.0"
+  checksum: 10c0/bf85857e64f5fbe4d84ade3b6140dac852f05096498e9055b7a85bb854f8c9142dfe8b93cd95934c1402267a40a50ab52311feb76d46457250292dfbe7f39a81
+  languageName: node
+  linkType: hard
+
+"@hpke/common@npm:^1.10.0":
+  version: 1.10.1
+  resolution: "@hpke/common@npm:1.10.1"
+  checksum: 10c0/9620587336341138d0b98c03f0bdf4fa6390350c378775d6aff6031c77dffed8315c672dd7c04abf1ec753994b047d7f7b87f4c1d706a19c412b2e1756ce986a
+  languageName: node
+  linkType: hard
+
+"@hpke/core@npm:1.9.0":
+  version: 1.9.0
+  resolution: "@hpke/core@npm:1.9.0"
+  dependencies:
+    "@hpke/common": "npm:^1.10.0"
+  checksum: 10c0/184d8c6a0e72e25362a8e5d559349cacf20f161df12ff31cbcdaf32b1a5ad08ebf4e44c512c52212e22c634449b7689a716b1753a565003a70a7cb430c7a1c76
+  languageName: node
+  linkType: hard
+
+"@hpke/dhkem-x25519@npm:^1.8.0":
+  version: 1.8.0
+  resolution: "@hpke/dhkem-x25519@npm:1.8.0"
+  dependencies:
+    "@hpke/common": "npm:^1.10.0"
+  checksum: 10c0/d3af0e2f1144c7097007882809f12fb6bc789697a044229693ca093b6ffa946febf9c3ced05d1a9ea14597114c4fa4f4d8d3105787c6d444ca76549331768516
+  languageName: node
+  linkType: hard
+
+"@hpke/hybridkem-x-wing@npm:0.7.0":
+  version: 0.7.0
+  resolution: "@hpke/hybridkem-x-wing@npm:0.7.0"
+  dependencies:
+    "@hpke/common": "npm:^1.10.0"
+    "@hpke/dhkem-x25519": "npm:^1.8.0"
+    mlkem: "npm:^2.5.0"
+  checksum: 10c0/07389e06d8d727f960a701945f277470512ce359361e68c6cff895c63c80da239ba64374dc271757e3b9da98cb755e71f5e706611fb60380488f6f423400ef14
+  languageName: node
+  linkType: hard
+
+"@hpke/ml-kem@npm:0.3.0":
+  version: 0.3.0
+  resolution: "@hpke/ml-kem@npm:0.3.0"
+  dependencies:
+    "@hpke/common": "npm:^1.10.0"
+    mlkem: "npm:^2.5.0"
+  checksum: 10c0/66c38b2ba966fa6f52c374c827151403621f337f3d9185f7eb9fed4f8b5a6cc17aefddc0e4a90eba2e7e0b4e1dc34313f6482ec105047201dcb81f636fe7e4db
+  languageName: node
+  linkType: hard
+
 "@humanfs/core@npm:^0.19.2":
   version: 0.19.2
   resolution: "@humanfs/core@npm:0.19.2"
@@ -2953,6 +3008,13 @@ __metadata:
     "@formatjs/unplugin": "npm:1.2.12"
     "@gamestdio/websocket": "npm:0.3.2"
     "@github/webauthn-json": "npm:2.1.1"
+    "@hpke/chacha20poly1305": "npm:1.8.0"
+    "@hpke/core": "npm:1.9.0"
+    "@hpke/hybridkem-x-wing": "npm:0.7.0"
+    "@hpke/ml-kem": "npm:0.3.0"
+    "@noble/ciphers": "npm:2.2.0"
+    "@noble/curves": "npm:2.2.0"
+    "@noble/post-quantum": "npm:0.6.1"
     "@optimize-lodash/rollup-plugin": "npm:6.0.0"
     "@phosphor-icons/react": "npm:2.1.10"
     "@react-aria/utils": "npm:^3.34.1"
@@ -3075,6 +3137,7 @@ __metadata:
     terser: "npm:5.51.2"
     tesseract.js: "npm:7.0.0"
     tiny-queue: "npm:0.2.1"
+    ts-mls: "npm:2.0.0-rc.16"
     twitter-text: "npm:3.1.0"
     type-fest: "npm:5.7.0"
     typescript: "npm:@typescript/typescript6@6.0.2"
@@ -3159,6 +3222,40 @@ __metadata:
     "@emnapi/core": ^1.7.1 || ^2.0.0-alpha.4
     "@emnapi/runtime": ^1.7.1 || ^2.0.0-alpha.4
   checksum: 10c0/4bd7be975f7c806bf7c33255b53257cdcd603c573e453b2f6878550bcfd59722d0d34c97627ee6a0353d91274b738d29b32ba1f0fe552a5fca1c2da80aa17bdc
+  languageName: node
+  linkType: hard
+
+"@noble/ciphers@npm:2.2.0, @noble/ciphers@npm:~2.2.0":
+  version: 2.2.0
+  resolution: "@noble/ciphers@npm:2.2.0"
+  checksum: 10c0/56396fa9b2cd7863999d9d70c6cbfcc03db9644cbbac9bb9d383d18f701bee3eb09f36878d8252a763c8d1fb6f0807339e06e2d28f18b14c525133c57c14508d
+  languageName: node
+  linkType: hard
+
+"@noble/curves@npm:2.2.0, @noble/curves@npm:~2.2.0":
+  version: 2.2.0
+  resolution: "@noble/curves@npm:2.2.0"
+  dependencies:
+    "@noble/hashes": "npm:2.2.0"
+  checksum: 10c0/e545d3bb03ebedd5c04c2cab81342d64f5ce8a4c1019cfe207f3dc69174bc0ad7cfb50effc31bfa8616b8340900f445dd053da7454190428857c4eedd3b51413
+  languageName: node
+  linkType: hard
+
+"@noble/hashes@npm:2.2.0, @noble/hashes@npm:~2.2.0":
+  version: 2.2.0
+  resolution: "@noble/hashes@npm:2.2.0"
+  checksum: 10c0/cad8630c504d6b9271984f685cd0af9101b40988fc2dfbe17ccdf068a9941f95cc5c9957d89e9ca4b7ca94c15cb35f93510c5d53a09fbcc83ee503b93d0a1034
+  languageName: node
+  linkType: hard
+
+"@noble/post-quantum@npm:0.6.1":
+  version: 0.6.1
+  resolution: "@noble/post-quantum@npm:0.6.1"
+  dependencies:
+    "@noble/ciphers": "npm:~2.2.0"
+    "@noble/curves": "npm:~2.2.0"
+    "@noble/hashes": "npm:~2.2.0"
+  checksum: 10c0/ac0dfed583ab20aeb93b4aa734f2228c6b5ebc6bc1f32de28f7b4b97511a5bac29c6067394f8828006fdce4f10874cda088160a2f1b996e59db3313d48861940
   languageName: node
   linkType: hard
 
@@ -10131,6 +10228,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"mlkem@npm:^2.5.0":
+  version: 2.7.0
+  resolution: "mlkem@npm:2.7.0"
+  checksum: 10c0/98fc63e620c43ba7542ca88518035112a5591490d80ef0fa88276c7ef3366788bcfb2f24e7e2762678224d58cf9bc41075f049609ee9a7b49313f42d2652be60
+  languageName: node
+  linkType: hard
+
 "mrmime@npm:^2.0.0":
   version: 2.0.1
   resolution: "mrmime@npm:2.0.1"
@@ -13638,6 +13742,36 @@ __metadata:
   version: 2.3.0
   resolution: "ts-dedent@npm:2.3.0"
   checksum: 10c0/bfc3331e0740191c0134fb526e7f01e16657e50955c9395de14703c6ef17119c91651fa044cf558dc9c1dbb0fe1b2a74e303aeebcbd5e3b31acd14f72f545a54
+  languageName: node
+  linkType: hard
+
+"ts-mls@npm:2.0.0-rc.16":
+  version: 2.0.0-rc.16
+  resolution: "ts-mls@npm:2.0.0-rc.16"
+  dependencies:
+    "@hpke/core": "npm:1.9.0"
+  peerDependencies:
+    "@hpke/chacha20poly1305": 1.8.0
+    "@hpke/dhkem-x448": 1.8.0
+    "@hpke/hybridkem-x-wing": 0.7.0
+    "@hpke/ml-kem": 0.3.0
+    "@noble/ciphers": 2.2.0
+    "@noble/curves": 2.2.0
+    "@noble/post-quantum": 0.6.1
+  peerDependenciesMeta:
+    "@hpke/chacha20poly1305":
+      optional: true
+    "@hpke/dhkem-x448":
+      optional: true
+    "@hpke/hybridkem-x-wing":
+      optional: true
+    "@hpke/ml-kem":
+      optional: true
+    "@noble/curves":
+      optional: true
+    "@noble/post-quantum":
+      optional: true
+  checksum: 10c0/7b627c7205ef169388c0683c0cc64ba05b4e1ebbcdcd7010dcb9ebdc7271845fc0a5b3707a212c8b041a8a5075d03d73a23103ad7dfc2bb89feed74d4169a9a2
   languageName: node
   linkType: hard
 

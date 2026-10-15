@@ -42,12 +42,13 @@ RSpec.describe ActivityPub::PqcSigning do
       ClimateControl.modify(PQC_ACTIVITYPUB_SIGNING: 'true') { example.run }
     end
 
-    it 'keeps RSA-only behavior for accounts not explicitly provisioned' do
+    it 'preserves RSA signing when no PQC key is provisioned' do
       account
+      key_count = Keypair.count
 
-      expect { signed }.to_not change(Keypair, :count)
       expect(signed).to_not have_key('proof')
       expect(signed['signature']['type']).to eq('RsaSignature2017')
+      expect(Keypair.count).to eq(key_count)
     end
 
     context 'with a native ML-DSA-44 key' do
@@ -74,6 +75,15 @@ RSpec.describe ActivityPub::PqcSigning do
         expect(ActivityPub::ObjectIntegrityProof.new(signed.without('signature')).verify_actor!).to eq(receiver_actor)
         expect(account.keypair(type: :rsa).reload.attributes).to eq(original_rsa)
         expect(document).to eq(original_document)
+      end
+
+      it 'preserves an object-form caller context while adding proof contexts' do
+        object_context = { '@vocab' => 'https://www.w3.org/ns/activitystreams' }
+        secured = described_class.new(document.merge('@context' => object_context)).sign!(account)
+
+        expect(secured['@context']).to include(object_context, 'https://w3id.org/security/v1', ActivityPub::ObjectIntegrityProof::CONTEXT)
+        expect(ActivityPub::LinkedDataSignature.new(secured).verify_actor!).to eq(receiver_actor)
+        expect(ActivityPub::ObjectIntegrityProof.new(secured.without('signature')).verify_actor!).to eq(receiver_actor)
       end
 
       it 'preserves caller-supplied RSA signing keys' do

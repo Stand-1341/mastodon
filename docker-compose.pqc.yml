@@ -1,0 +1,67 @@
+# Opt-in PostgreSQL 18 hybrid TLS overlay for production Compose deployments.
+# Requires ./secrets/postgres-tls/{ca.crt,server.crt,server.key} and
+# ./secrets/postgres-superuser-password. server.crt must include DNS:db in its
+# subjectAltName and chain to ca.crt.
+services:
+  db:
+    build:
+      context: .
+      dockerfile: docker-compose-pqc-postgres.Dockerfile
+    image: mastodon-postgres-pqc:18-alpine
+    entrypoint: ['/usr/local/bin/postgres-pqc-production-entrypoint.sh']
+    environment:
+      PG_TLS_HOSTNAME: db
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_superuser_password
+    volumes:
+      - ./postgres18-pqc:/var/lib/postgresql
+      - ./secrets/postgres-tls:/run/postgres-tls-source:ro
+      - postgres-pqc-tls-private:/var/lib/postgresql/tls-private
+    secrets:
+      - postgres_superuser_password
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mastodon-pqc:local
+    environment:
+      DB_HOST: db
+      DB_SSLMODE: verify-full
+      DB_SSLROOTCERT: /run/pqc-postgres-tls/ca.crt
+      PQC_HYBRID_DB_TLS_CA_PATH: /run/pqc-postgres-tls/ca.crt
+      PQC_REQUIRE_HYBRID_DB_TLS: 'true'
+    volumes:
+      - ./secrets/postgres-tls/ca.crt:/run/pqc-postgres-tls/ca.crt:ro
+
+  streaming:
+    build:
+      context: .
+      dockerfile: streaming/Dockerfile
+    image: mastodon-streaming-pqc:local
+    environment:
+      DB_HOST: db
+      DB_SSLMODE: verify-full
+      DB_SSLROOTCERT: /run/pqc-postgres-tls/ca.crt
+      PQC_HYBRID_DB_TLS_CA_PATH: /run/pqc-postgres-tls/ca.crt
+      PQC_REQUIRE_HYBRID_DB_TLS: 'true'
+    volumes:
+      - ./secrets/postgres-tls/ca.crt:/run/pqc-postgres-tls/ca.crt:ro
+
+  sidekiq:
+    image: mastodon-pqc:local
+    environment:
+      DB_HOST: db
+      DB_SSLMODE: verify-full
+      DB_SSLROOTCERT: /run/pqc-postgres-tls/ca.crt
+      PQC_HYBRID_DB_TLS_CA_PATH: /run/pqc-postgres-tls/ca.crt
+      PQC_REQUIRE_HYBRID_DB_TLS: 'true'
+    volumes:
+      - ./secrets/postgres-tls/ca.crt:/run/pqc-postgres-tls/ca.crt:ro
+
+volumes:
+  postgres-pqc-tls-private:
+
+secrets:
+  postgres_superuser_password:
+    file: ./secrets/postgres-superuser-password

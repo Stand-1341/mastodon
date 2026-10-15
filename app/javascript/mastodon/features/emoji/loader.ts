@@ -41,9 +41,16 @@ async function importEmojiDataImpl(locale: Locale, shortcodes: boolean) {
 
   const shortcodesData: ShortcodesDataset[] = [];
   if (shortcodes) {
-    const shortcodesResponse = await fetchIfNotLoaded<ShortcodesDataset>({
+    let shortcodesResponse = await fetchIfNotLoaded<ShortcodesDataset>({
       key: `${locale}-shortcodes`,
       path: localeToShortcodesPath(locale),
+    });
+    // Another worker can cache this path before it finishes storing emoji
+    // data. If this worker fetched fresh emoji data, fetch the shortcodes too.
+    shortcodesResponse ??= await fetchIfNotLoaded<ShortcodesDataset>({
+      key: `${locale}-shortcodes`,
+      path: localeToShortcodesPath(locale),
+      force: true,
     });
     if (shortcodesResponse) {
       shortcodesData.push(shortcodesResponse);
@@ -139,20 +146,25 @@ function localeToShortcodesPath(locale: Locale) {
 async function fetchIfNotLoaded<ResultType extends object[] | object>({
   key: rawKey,
   path,
+  force = false,
 }: {
   key: string;
   path: string;
+  force?: boolean;
 }): Promise<ResultType | null> {
   const key = toValidCacheKey(rawKey);
 
   const value = await loadCacheValue(key);
 
-  if (value === path) {
+  if (value === path && !force) {
     log('data for %s already loaded, skipping fetch', key);
     return null;
   }
 
-  const response = await fetchAndCheckEtag({ path });
+  const response = await fetchAndCheckEtag({
+    path,
+    cache: force ? 'reload' : undefined,
+  });
   if (!response) {
     return null;
   }
@@ -166,9 +178,11 @@ async function fetchIfNotLoaded<ResultType extends object[] | object>({
 async function fetchAndCheckEtag({
   oldEtag,
   path,
+  cache,
 }: {
   oldEtag?: string;
   path: string;
+  cache?: RequestCache;
 }) {
   const headers = new Headers({
     'Content-Type': 'application/json',
@@ -179,7 +193,7 @@ async function fetchAndCheckEtag({
 
   // Use location.origin as this script may be loaded from a CDN domain.
   const url = new URL(path, location.origin);
-  const response = await fetch(url, { headers });
+  const response = await fetch(url, { headers, cache });
 
   // If not modified, return null
   if (response.status === 304) {

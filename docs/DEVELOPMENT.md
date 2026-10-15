@@ -68,9 +68,39 @@ docker compose -f .devcontainer/compose.yaml exec app bin/setup
 docker compose -f .devcontainer/compose.yaml exec app bin/dev
 ```
 
-The development container opts out of PostgreSQL TLS because its bundled local
-database does not configure TLS. For other local databases without TLS, set
-`DB_SSLMODE=disable`; the application default is `require`.
+The devcontainer PostgreSQL service uses a locally generated CA and a server
+certificate for `db`. The app and streaming processes connect with
+`DB_SSLMODE=verify-full`; the CA and server keys persist in separate Docker
+volumes, and only the public CA certificate is mounted read-only into the app.
+The root production `docker-compose.yml`, Vagrant and CI database services have
+their own TLS setup; set `DB_SSLMODE=disable` only for a local PostgreSQL server
+that has no TLS configured.
+
+To run the local Nginx TLS 1.3 edge with `X25519MLKEM768` preferred, start its
+optional profile and check the health endpoint:
+
+```shell
+docker compose --profile pqc up -d pqc-edge
+curl -k https://localhost:8443/health
+```
+
+The edge uses a generated self-signed localhost certificate. It is a local
+hybrid key-exchange test endpoint, not a public certificate or production
+ingress. To confirm the negotiated group, run from the app container:
+
+```shell
+docker compose exec app openssl s_client -connect pqc-edge:443 \
+  -servername localhost -tls1_3 -groups X25519MLKEM768 -brief
+```
+
+The localhost-only Compose override enables outbound ML-DSA proofs and the
+owner-only private-media API. Provision an ML-DSA key explicitly for a local
+account, then verify its encrypted database key:
+
+```shell
+docker compose exec app bin/rails 'pqc:generate_key[username]'
+docker compose exec app bin/rails 'pqc:verify_key[username]'
+```
 
 #### Localhost-only Docker setup (including Windows)
 

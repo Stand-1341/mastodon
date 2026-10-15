@@ -43,6 +43,7 @@ import LoadingBarContainer from './containers/loading_bar_container';
 import ModalContainer from './containers/modal_container';
 import {
   Compose,
+  PqcMessaging,
   Status,
   KeyboardShortcuts,
   Firehose,
@@ -242,6 +243,7 @@ class SwitchingColumnsArea extends PureComponent {
             <WrappedRoute path='/directory' component={Directory} content={children} />
             <WrappedRoute path='/explore' component={Explore} content={children} />
             <WrappedRoute path='/search' component={Search} content={children} />
+            <WrappedRoute path='/pqc' exact component={PqcMessaging} content={children} />
             <WrappedRoute path={['/publish', '/statuses/new']} component={Compose} content={children} />
 
             <WrappedRoute path='/profile/edit' component={AccountEdit} content={children} />

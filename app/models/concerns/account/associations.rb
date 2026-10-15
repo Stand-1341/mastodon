@@ -26,6 +26,10 @@ module Account::Associations
         has_many :list_accounts
         has_many :instance_moderation_notes
         has_many :media_attachments
+        has_many :private_media_objects
+        has_many :pqc_devices
+        has_many :pqc_conversation_members
+        has_many :pqc_messages
         has_many :mentions
         has_many :migrations, class_name: 'AccountMigration'
         has_many :notification_permissions

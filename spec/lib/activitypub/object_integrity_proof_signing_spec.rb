@@ -51,6 +51,14 @@ RSpec.describe ActivityPub::ObjectIntegrityProof, '#sign!' do
     end
   end
 
+  it 'preserves an object-form JSON-LD context when appending the proof context' do
+    object_context = { '@vocab' => 'https://www.w3.org/ns/activitystreams' }
+    secured = described_class.new(document.merge('@context' => object_context)).sign!(account, sign_with: key)
+
+    expect(secured['@context']).to eq([object_context, described_class::CONTEXT])
+    expect(described_class.verify_mldsa44_jcs_2024(secured, OpenSSL::PKey.read(key.public_key))).to be true
+  end
+
   it 'rejects signatures made with a different key' do
     secured = described_class.new(document).sign!(account, sign_with: key)
 

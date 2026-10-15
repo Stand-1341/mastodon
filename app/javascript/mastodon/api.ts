@@ -140,6 +140,7 @@ export async function apiRequest<
     signal?: AbortSignal;
     params?: RequestParamsOrData<ApiParamsOrData>;
     data?: RequestParamsOrData<ApiParamsOrData>;
+    headers?: RawAxiosRequestHeaders;
     timeout?: number;
   } = {},
 ) {

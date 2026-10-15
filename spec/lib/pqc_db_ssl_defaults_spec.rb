@@ -9,20 +9,28 @@ RSpec.describe 'PostgreSQL TLS configuration', type: :feature do
 
   let(:sslmode) { nil }
   let(:sslrootcert) { nil }
+  let(:db_host) { nil }
   let(:database_url) { nil }
+  let(:require_hybrid_tls) { nil }
+  let(:hybrid_ca_path) { nil }
   let(:directory) { Dir.mktmpdir('mastodon-db-tls-') }
   let(:ca_path) { File.join(directory, 'CA with spaces #1.pem') }
   let(:connection_configs) { db_config.slice('development', 'test', 'production').values.flat_map(&:values) }
   let(:resolved_config) do
-    ActiveRecord::DatabaseConfigurations.new(db_config.except('default'))
+    configurations = db_config.except('default')
+    configurations['test']['primary']['url'] = ENV['DATABASE_URL'] if ENV['DATABASE_URL'].present?
+
+    ActiveRecord::DatabaseConfigurations.new(configurations)
       .configs_for(env_name: 'test', name: 'primary').configuration_hash
   end
 
   around do |example|
     # These specs test libpq path configuration, not certificate negotiation.
     File.write(ca_path, 'CA file fixture')
-    ClimateControl.modify DB_SSLMODE: sslmode, DB_SSLROOTCERT: sslrootcert,
-                          DATABASE_URL: database_url, PRIMARY_DATABASE_URL: nil, REPLICA_DATABASE_URL: nil do
+    ClimateControl.modify DB_HOST: db_host, DB_SSLMODE: sslmode, DB_SSLROOTCERT: sslrootcert,
+                          DATABASE_URL: database_url, PRIMARY_DATABASE_URL: nil, REPLICA_DATABASE_URL: nil,
+                          PQC_REQUIRE_HYBRID_DB_TLS: require_hybrid_tls,
+                          PQC_HYBRID_DB_TLS_CA_PATH: hybrid_ca_path, REPLICA_DB_HOST: nil do
       example.run
     end
   ensure
@@ -85,6 +93,36 @@ RSpec.describe 'PostgreSQL TLS configuration', type: :feature do
 
     it 'preserves Active Record URL precedence' do
       expect(resolved_config[:sslmode]).to eq('disable')
+    end
+  end
+
+  context 'when hybrid database TLS is required' do
+    let(:require_hybrid_tls) { 'true' }
+    let(:db_host) { 'db' }
+    let(:hybrid_ca_path) { ca_path }
+    let(:sslmode) { 'verify-full' }
+    let(:sslrootcert) { ca_path }
+    let(:database_url) { 'postgresql://mastodon@db/mastodon' }
+
+    it 'accepts an in-cluster URL with inherited verified TLS settings' do
+      expect { db_config }.to_not raise_error
+      expect(resolved_config).to include(host: 'db', sslmode: 'verify-full')
+    end
+
+    context 'with a URL that changes the database host' do
+      let(:database_url) { 'postgresql://mastodon@other-db/mastodon' }
+
+      it 'fails closed during configuration' do
+        expect { db_config }.to raise_error(ArgumentError, /requires DATABASE_URL to connect to db/)
+      end
+    end
+
+    context 'with a URL that disables certificate verification' do
+      let(:database_url) { 'postgresql://mastodon@db/mastodon?sslmode=require' }
+
+      it 'fails closed during configuration' do
+        expect { db_config }.to raise_error(ArgumentError, /requires DATABASE_URL sslmode=verify-full/)
+      end
     end
   end
 

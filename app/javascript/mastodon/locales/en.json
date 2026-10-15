@@ -1525,6 +1525,7 @@
   "tabs_bar.menu": "Menu",
   "tabs_bar.messages": "Messages",
   "tabs_bar.notifications": "Notifications",
+  "tabs_bar.pqc_messaging": "Encrypted messaging (experimental)",
   "tabs_bar.public_feed": "Public Feed",
   "tabs_bar.public_feeds": "Public Feeds",
   "tabs_bar.publish": "New Post",

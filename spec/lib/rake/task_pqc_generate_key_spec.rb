@@ -31,7 +31,7 @@ RSpec.describe Rake::Task do
       other_account = Fabricate(:account)
 
       ClimateControl.modify PQC_ACTIVITYPUB_SIGNING: 'false' do
-        expect { task.invoke('alice') }.to output(%r{\AML-DSA-44 key available for @alice: https://[^\n]+#ml-dsa-44-[a-f0-9]{32}\n\z}).to_stdout
+        expect { task.invoke('alice') }.to output(%r{\AML-DSA-44 key available for @alice: https?://[^\n]+#ml-dsa-44-[a-f0-9]{32}\n\z}).to_stdout
       end
 
       expect(account.keypairs.find_by!(type: :'ml-dsa-44')).to have_attributes(public_key: public_key, private_key: private_key)

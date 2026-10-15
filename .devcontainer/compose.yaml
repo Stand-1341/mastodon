@@ -6,6 +6,8 @@ services:
       dockerfile: .devcontainer/Dockerfile
     volumes:
       - ..:/workspaces/mastodon:cached
+      - postgres-tls:/run/postgres-tls:ro
+      - pqc-postgres-tls:/run/pqc-postgres-tls:ro
     environment:
       RAILS_ENV: development
       NODE_ENV: development
@@ -14,11 +16,12 @@ services:
       BOOTSNAP_CACHE_DIR: /tmp
       REDIS_HOST: redis
       REDIS_PORT: '6379'
-      DB_HOST: db
+      DB_HOST: ${DB_HOST:-db}
       DB_USER: postgres
       DB_PASS: postgres
       DB_PORT: '5432'
-      DB_SSLMODE: disable
+      DB_SSLMODE: ${DB_SSLMODE:-verify-full}
+      DB_SSLROOTCERT: ${DB_SSLROOTCERT:-/run/pqc-postgres-tls/ca.crt}
       ES_ENABLED: 'true'
       ES_HOST: es
       ES_PORT: '9200'
@@ -36,15 +39,100 @@ services:
       - internal_network
 
   db:
-    image: postgres:14-alpine
+    build:
+      context: .
+      dockerfile: postgres-pqc.Dockerfile
+    image: mastodon-local-postgres-pqc
+    entrypoint: ['/bin/sh', '/usr/local/bin/postgres-pqc-entrypoint.sh']
     restart: unless-stopped
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - pqc-postgres18-data:/var/lib/postgresql/data
+      - pqc-postgres-server-tls:/var/lib/postgresql/tls-private
+      - pqc-postgres-tls:/var/lib/postgresql/tls-public
+      - ./postgres-pqc-entrypoint.sh:/usr/local/bin/postgres-pqc-entrypoint.sh:ro
     environment:
+      PGDATA: /var/lib/postgresql/data
+      PG_TLS_HOSTNAME: db
       POSTGRES_USER: postgres
       POSTGRES_DB: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_HOST_AUTH_METHOD: trust
+    networks:
+      - internal_network
+
+  db-legacy:
+    profiles: ['legacy-db']
+    build:
+      context: .
+      dockerfile: postgres.Dockerfile
+    image: mastodon-local-postgres-tls
+    entrypoint: ['/bin/sh', '/usr/local/bin/postgres-tls-entrypoint.sh']
+    restart: unless-stopped
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - postgres-server-tls:/var/lib/postgresql/tls-private
+      - postgres-tls:/var/lib/postgresql/tls-public
+      - ./postgres-tls-entrypoint.sh:/usr/local/bin/postgres-tls-entrypoint.sh:ro
+    environment:
+      PG_TLS_HOSTNAME: db-legacy
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+    networks:
+      - internal_network
+
+  pqc-edge:
+    profiles: ['pqc']
+    build:
+      context: .
+      dockerfile: pqc-edge.Dockerfile
+    image: mastodon-local-pqc-edge
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - '127.0.0.1:8443:443'
+    volumes:
+      - pqc-edge-tls:/etc/nginx/tls
+    healthcheck:
+      test: ['CMD', '/usr/local/bin/verify-pqc-edge.sh']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    networks:
+      - external_network
+      - internal_network
+
+  local-kms:
+    profiles: ['pqc-kms']
+    image: localstack/localstack:4.6.0
+    environment:
+      SERVICES: kms
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      DEBUG: '0'
+    networks:
+      internal_network:
+        aliases:
+          - local-kms
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'curl -fsS http://127.0.0.1:4566/_localstack/health | grep -q ''"kms": "running"''',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  pqc-openmls-interop:
+    profiles: ['pqc-interop']
+    build:
+      context: ..
+      dockerfile: .devcontainer/pqc-interop.Dockerfile
+    image: mastodon-local-openmls-interop
     networks:
       - internal_network
 
@@ -84,6 +172,12 @@ services:
 
 volumes:
   postgres-data:
+  postgres-server-tls:
+  postgres-tls:
+  pqc-postgres18-data:
+  pqc-postgres-server-tls:
+  pqc-postgres-tls:
+  pqc-edge-tls:
   redis-data:
   es-data:
   lt-data:

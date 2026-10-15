@@ -6,6 +6,10 @@ export function Compose () {
   return import('../../compose');
 }
 
+export function PqcMessaging () {
+  return import('../../pqc_messaging').then(module => ({ default: module.PqcMessagingPage }));
+}
+
 export function Notifications () {
   return import('../../notifications_v2');
 }

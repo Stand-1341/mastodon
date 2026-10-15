@@ -86,6 +86,18 @@ class Rack::Attack
     req.authenticated_user_id if req.post? && req.path.match?(%r{\A/api/v\d+/media\z}i)
   end
 
+  throttle('throttle_pqc_message_relay', limit: 120, period: 5.minutes) do |req|
+    req.authenticated_user_id if req.post? && req.path.match?(%r{\A/api/v1/pqc_conversations/[^/]+/messages\z})
+  end
+
+  throttle('throttle_pqc_private_media_upload', limit: 10, period: 30.minutes) do |req|
+    req.authenticated_user_id if req.post? && req.path == '/api/v1/private_media'
+  end
+
+  throttle('throttle_pqc_private_media_download', limit: 30, period: 5.minutes) do |req|
+    req.authenticated_user_id if req.get? && req.path.match?(%r{\A/api/v1/private_media/\d+\z})
+  end
+
   throttle('throttle_media_proxy', limit: 30, period: 10.minutes) do |req|
     req.throttleable_remote_ip if req.path.start_with?('/media_proxy')
   end

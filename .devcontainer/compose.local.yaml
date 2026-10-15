@@ -10,6 +10,9 @@ services:
       ES_ENABLED: 'false'
       LIBRE_TRANSLATE_ENDPOINT: ''
       REMOTE_DEV: '1'
+      PQC_ACTIVITYPUB_SIGNING: 'true'
+      PQC_PRIVATE_MEDIA_ENCRYPTION: 'true'
+      PQC_E2EE_EXPERIMENTAL: 'true'
     ports: !override
       - '127.0.0.1:3000:3000'
       - '127.0.0.1:3036:3036'

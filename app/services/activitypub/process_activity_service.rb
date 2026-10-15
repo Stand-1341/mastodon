@@ -12,6 +12,8 @@ class ActivityPub::ProcessActivityService < BaseService
     return unless @json.is_a?(Hash)
 
     ActivityPub::OpenTelemetry.decorate_current_span(payload: @json)
+    pqc_proof_actor = nil
+    pqc_proof_checked = false
 
     # Ideally, we should treat all ActivityPub payloads as proper JSON-LD.
     # However, some implementations do not produce valid JSON-LD, and processing JSON-LD is pretty expensive.
@@ -52,8 +54,22 @@ class ActivityPub::ProcessActivityService < BaseService
       # This would require keeping the original JSON around and changing forwarding logic in
       # a few places. This is not worth it right now since FEP-8b32 is not widely supported,
       # but could be worth doing in the future.
-      @account ||= actor_from_verified_object_integrity_proof(original_json)
+      if @account.nil? || mldsa_proof_present?
+        pqc_proof_actor = actor_from_verified_object_integrity_proof(original_json)
+        pqc_proof_checked = true
+        @account ||= pqc_proof_actor
+      end
     end
+
+    # Always validate an advertised ML-DSA proof. The optional strict mode also
+    # requires one, while still allowing legacy peers to omit it by default.
+    pqc_proof_actor = verified_pqc_actor(original_json) if mldsa_proof_present? && !pqc_proof_checked
+    return if mldsa_proof_present? && pqc_proof_actor.nil?
+
+    # Optional strict mode for controlled deployments. The default remains
+    # additive for federation compatibility; strict mode rejects RSA-only or
+    # otherwise unproven activities, including those accepted by LD signatures.
+    return if require_pqc_proof? && !mldsa_proof_present?
 
     return if !@account.is_a?(Account) || different_actor? || suspended_actor? || @account.local?
 
@@ -80,6 +96,23 @@ class ActivityPub::ProcessActivityService < BaseService
 
   private
 
+  def require_pqc_proof?
+    ENV['PQC_ACTIVITYPUB_REQUIRE_PROOF'] == 'true'
+  end
+
+  def mldsa_proof_present?
+    proof = @json['proof']
+    proof.is_a?(Hash) && proof['cryptosuite'] == 'mldsa44-jcs-2024'
+  end
+
+  def verified_pqc_actor(original_json)
+    proof = original_json['proof']
+    return unless proof.is_a?(Hash) && proof['cryptosuite'] == 'mldsa44-jcs-2024'
+
+    proof_actor = actor_from_verified_object_integrity_proof(original_json)
+    proof_actor if proof_actor.present? && proof_actor.uri == value_or_id(original_json['actor'])
+  end
+
   def different_actor?
     @json['actor'].present? && value_or_id(@json['actor']) != @account.uri
   end
@@ -104,7 +137,7 @@ class ActivityPub::ProcessActivityService < BaseService
 
   def actor_from_verified_object_integrity_proof(original_json)
     proof = original_json['proof']
-    return unless proof.is_a?(Hash) && original_json['actor'] == @json['actor']
+    return unless proof.is_a?(Hash) && value_or_id(original_json['actor']) == value_or_id(@json['actor'])
     return unless proof['verificationMethod'].is_a?(String)
     return if domain_not_allowed?(proof['verificationMethod'])
 

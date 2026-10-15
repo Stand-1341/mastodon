@@ -34,7 +34,6 @@ RSpec.describe ActivityPub::ProcessActivityService do
 
   it 'processes relayed dual-signed activities through the real RSA verification path' do
     secured
-    allow(ActivityPub::ObjectIntegrityProof).to receive(:new).and_raise('Unexpected PQC fallback')
 
     described_class.new.call(secured.to_json, relay)
 
@@ -51,6 +50,28 @@ RSpec.describe ActivityPub::ProcessActivityService do
     end
   end
 
+  it 'verifies an advertised ML-DSA proof on a direct actor activity by default' do
+    activity = secured
+    proof_verifier = instance_spy(ActivityPub::ObjectIntegrityProof, verify_actor!: actor)
+    allow(ActivityPub::ObjectIntegrityProof).to receive(:new).and_return(proof_verifier)
+
+    described_class.new.call(activity.to_json, actor)
+
+    expect(proof_verifier).to have_received(:verify_actor!)
+    expect(ActivityPub::Activity).to have_received(:factory)
+  end
+
+  it 'rejects an invalid advertised ML-DSA proof even when the legacy RSA signature verifies' do
+    invalid_proof = secured.deep_dup
+    invalid_proof['proof']['proofValue'] = "u#{Base64.urlsafe_encode64('invalid signature', padding: false)}"
+    rsa_verifier = instance_double(ActivityPub::LinkedDataSignature, verify_actor!: actor)
+    allow(ActivityPub::LinkedDataSignature).to receive(:new).and_return(rsa_verifier)
+
+    described_class.new.call(invalid_proof.to_json, relay)
+
+    expect(ActivityPub::Activity).to_not have_received(:factory)
+  end
+
   it 'verifies ML-DSA relayed activities when RSA verification is unavailable' do
     secured
     rsa_verifier = instance_double(ActivityPub::LinkedDataSignature, verify_actor!: nil)
@@ -59,6 +80,44 @@ RSpec.describe ActivityPub::ProcessActivityService do
     described_class.new.call(secured.to_json, relay)
 
     expect(ActivityPub::Activity).to have_received(:factory).with(instance_of(Hash), actor, hash_including(relayed_through_actor: relay))
+  end
+
+  it 'rejects RSA-only relayed activities when strict PQC proof policy is enabled' do
+    rsa_only = secured
+    rsa_verifier = instance_double(ActivityPub::LinkedDataSignature, verify_actor!: actor)
+    allow(ActivityPub::LinkedDataSignature).to receive(:new).and_return(rsa_verifier)
+
+    ClimateControl.modify(PQC_ACTIVITYPUB_REQUIRE_PROOF: 'true') do
+      described_class.new.call(rsa_only.without('proof').to_json, relay)
+    end
+
+    expect(ActivityPub::Activity).to_not have_received(:factory)
+  end
+
+  it 'accepts a relayed activity with a valid ML-DSA proof in strict PQC mode' do
+    ClimateControl.modify(PQC_ACTIVITYPUB_REQUIRE_PROOF: 'true') do
+      described_class.new.call(secured.to_json, relay)
+    end
+
+    expect(ActivityPub::Activity).to have_received(:factory).with(instance_of(Hash), actor, hash_including(relayed_through_actor: relay))
+  end
+
+  it 'rejects a valid Ed25519 proof when strict PQC proof policy is enabled' do
+    ed_proof = document.merge('proof' => {
+      'type' => 'DataIntegrityProof',
+      'proofPurpose' => 'assertionMethod',
+      'cryptosuite' => 'eddsa-jcs-2022',
+      'verificationMethod' => "#{actor.uri}#ed25519",
+      'proofValue' => 'uZmFrZQ',
+    })
+    verifier = instance_double(ActivityPub::ObjectIntegrityProof, verify_actor!: actor)
+    allow(ActivityPub::ObjectIntegrityProof).to receive(:new).and_return(verifier)
+
+    ClimateControl.modify(PQC_ACTIVITYPUB_REQUIRE_PROOF: 'true') do
+      described_class.new.call(ed_proof.to_json, relay)
+    end
+
+    expect(ActivityPub::Activity).to_not have_received(:factory)
   end
 
   it 'rejects tampering when the activity is relayed' do

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_13_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_14_200000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -983,6 +983,124 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_13_120000) do
     t.index ["status_id"], name: "index_polls_on_status_id"
   end
 
+  create_table "pqc_conversation_devices", force: :cascade do |t|
+    t.bigint "pqc_conversation_id", null: false
+    t.bigint "pqc_device_id", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["pqc_conversation_id", "pqc_device_id"], name: "index_pqc_conversation_devices_on_conversation_and_device", unique: true
+    t.index ["pqc_conversation_id"], name: "index_pqc_conversation_devices_on_pqc_conversation_id"
+    t.index ["pqc_device_id"], name: "index_pqc_conversation_devices_on_pqc_device_id"
+  end
+
+  create_table "pqc_conversation_members", force: :cascade do |t|
+    t.bigint "pqc_conversation_id", null: false
+    t.bigint "account_id", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.datetime "leave_requested_at"
+    t.string "invitation_status", default: "accepted", null: false
+    t.datetime "joined_at"
+    t.index ["account_id", "pqc_conversation_id"], name: "index_pqc_members_on_account_and_conversation"
+    t.index ["account_id"], name: "index_pqc_conversation_members_on_account_id"
+    t.index ["pqc_conversation_id", "account_id"], name: "index_pqc_members_on_conversation_and_account", unique: true
+    t.index ["pqc_conversation_id", "leave_requested_at"], name: "idx_on_pqc_conversation_id_leave_requested_at_c53a2b4dd2"
+    t.index ["pqc_conversation_id"], name: "index_pqc_conversation_members_on_pqc_conversation_id"
+  end
+
+  create_table "pqc_conversations", force: :cascade do |t|
+    t.bigint "creator_account_id", null: false
+    t.uuid "token", default: -> { "gen_random_uuid()" }, null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.datetime "ready_at"
+    t.string "setup_device_id"
+    t.index ["creator_account_id"], name: "index_pqc_conversations_on_creator_account_id"
+    t.index ["token"], name: "index_pqc_conversations_on_token", unique: true
+  end
+
+  create_table "pqc_device_request_nonces", force: :cascade do |t|
+    t.bigint "pqc_device_id", null: false
+    t.uuid "nonce", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["created_at"], name: "index_pqc_device_request_nonces_on_created_at"
+    t.index ["pqc_device_id", "nonce"], name: "index_pqc_device_request_nonces_unique_nonce", unique: true
+    t.index ["pqc_device_id"], name: "index_pqc_device_request_nonces_on_pqc_device_id"
+  end
+
+  create_table "pqc_devices", force: :cascade do |t|
+    t.bigint "account_id", null: false
+    t.string "device_id", null: false
+    t.string "fingerprint", null: false
+    t.binary "key_package", null: false
+    t.datetime "key_package_consumed_at"
+    t.datetime "revoked_at"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.uuid "key_package_claim_id"
+    t.bigint "key_package_claim_conversation_id"
+    t.binary "auth_public_key"
+    t.datetime "revocation_pending_at"
+    t.string "auth_fingerprint"
+    t.index ["account_id", "device_id"], name: "index_pqc_devices_on_account_id_and_device_id", unique: true
+    t.index ["account_id", "key_package_claim_id"], name: "index_pqc_devices_on_account_and_key_package_claim", where: "(key_package_claim_id IS NOT NULL)"
+    t.index ["account_id"], name: "index_pqc_devices_on_account_id"
+    t.index ["device_id"], name: "index_pqc_devices_on_device_id", unique: true
+    t.index ["key_package_claim_conversation_id"], name: "index_pqc_devices_on_key_package_claim_conversation_id"
+  end
+
+  create_table "pqc_member_additions", force: :cascade do |t|
+    t.bigint "pqc_conversation_id", null: false
+    t.bigint "actor_account_id", null: false
+    t.bigint "target_account_id", null: false
+    t.uuid "operation_id", null: false
+    t.string "sender_device_id", null: false
+    t.jsonb "added_device_ids", default: [], null: false
+    t.jsonb "client_message_ids", default: [], null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.uuid "key_package_request_id"
+    t.index ["actor_account_id"], name: "index_pqc_member_additions_on_actor_account_id"
+    t.index ["pqc_conversation_id", "operation_id"], name: "index_pqc_member_additions_on_conversation_and_operation", unique: true
+    t.index ["pqc_conversation_id"], name: "index_pqc_member_additions_on_pqc_conversation_id"
+    t.index ["target_account_id"], name: "index_pqc_member_additions_on_target_account_id"
+  end
+
+  create_table "pqc_member_removals", force: :cascade do |t|
+    t.bigint "pqc_conversation_id", null: false
+    t.bigint "actor_account_id", null: false
+    t.bigint "target_account_id", null: false
+    t.uuid "operation_id", null: false
+    t.string "sender_device_id", null: false
+    t.jsonb "client_message_ids", default: [], null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.string "target_device_id"
+    t.index ["actor_account_id"], name: "index_pqc_member_removals_on_actor_account_id"
+    t.index ["pqc_conversation_id", "operation_id"], name: "idx_on_pqc_conversation_id_operation_id_223a416f1e", unique: true
+    t.index ["pqc_conversation_id", "target_device_id"], name: "index_pqc_member_removals_on_conversation_target_device"
+    t.index ["pqc_conversation_id"], name: "index_pqc_member_removals_on_pqc_conversation_id"
+    t.index ["target_account_id"], name: "index_pqc_member_removals_on_target_account_id"
+  end
+
+  create_table "pqc_messages", force: :cascade do |t|
+    t.bigint "pqc_conversation_id", null: false
+    t.bigint "account_id", null: false
+    t.binary "ciphertext", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.string "recipient_device_id"
+    t.string "sender_device_id"
+    t.uuid "client_message_id"
+    t.index ["account_id"], name: "index_pqc_messages_on_account_id"
+    t.index ["pqc_conversation_id", "account_id", "sender_device_id", "client_message_id"], name: "index_pqc_messages_on_client_idempotency", unique: true, where: "(client_message_id IS NOT NULL)"
+    t.index ["pqc_conversation_id", "id"], name: "index_pqc_messages_on_pqc_conversation_id_and_id"
+    t.index ["pqc_conversation_id", "recipient_device_id", "id"], name: "index_pqc_messages_on_conversation_recipient_and_id"
+    t.index ["pqc_conversation_id", "sender_device_id", "id"], name: "index_pqc_messages_on_conversation_sender_and_id"
+    t.index ["pqc_conversation_id"], name: "index_pqc_messages_on_pqc_conversation_id"
+  end
+
   create_table "preview_card_providers", force: :cascade do |t|
     t.datetime "created_at", null: false
     t.string "domain", default: "", null: false
@@ -1045,6 +1163,23 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_13_120000) do
     t.bigint "preview_card_id", null: false
     t.bigint "status_id", null: false
     t.string "url"
+  end
+
+  create_table "private_media_objects", force: :cascade do |t|
+    t.bigint "account_id", null: false
+    t.uuid "token", null: false
+    t.string "storage_key", null: false
+    t.string "content_type", default: "application/octet-stream", null: false
+    t.bigint "byte_size", null: false
+    t.text "wrapped_key", null: false
+    t.string "key_encryption_provider", null: false
+    t.string "nonce", null: false
+    t.string "auth_tag", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["account_id"], name: "index_private_media_objects_on_account_id"
+    t.index ["storage_key"], name: "index_private_media_objects_on_storage_key", unique: true
+    t.index ["token"], name: "index_private_media_objects_on_token", unique: true
   end
 
   create_table "quotes", id: :bigint, default: -> { "timestamp_id('quotes'::text)" }, force: :cascade do |t|
@@ -1609,9 +1744,26 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_13_120000) do
   add_foreign_key "poll_votes", "polls", on_delete: :cascade
   add_foreign_key "polls", "accounts", on_delete: :cascade
   add_foreign_key "polls", "statuses", on_delete: :cascade
+  add_foreign_key "pqc_conversation_devices", "pqc_conversations"
+  add_foreign_key "pqc_conversation_devices", "pqc_devices"
+  add_foreign_key "pqc_conversation_members", "accounts"
+  add_foreign_key "pqc_conversation_members", "pqc_conversations"
+  add_foreign_key "pqc_conversations", "accounts", column: "creator_account_id"
+  add_foreign_key "pqc_device_request_nonces", "pqc_devices"
+  add_foreign_key "pqc_devices", "accounts"
+  add_foreign_key "pqc_devices", "pqc_conversations", column: "key_package_claim_conversation_id"
+  add_foreign_key "pqc_member_additions", "accounts", column: "actor_account_id"
+  add_foreign_key "pqc_member_additions", "accounts", column: "target_account_id"
+  add_foreign_key "pqc_member_additions", "pqc_conversations"
+  add_foreign_key "pqc_member_removals", "accounts", column: "actor_account_id"
+  add_foreign_key "pqc_member_removals", "accounts", column: "target_account_id"
+  add_foreign_key "pqc_member_removals", "pqc_conversations"
+  add_foreign_key "pqc_messages", "accounts"
+  add_foreign_key "pqc_messages", "pqc_conversations"
   add_foreign_key "preview_card_trends", "preview_cards", on_delete: :cascade
   add_foreign_key "preview_cards", "accounts", column: "author_account_id", on_delete: :nullify
   add_foreign_key "preview_cards", "accounts", column: "unverified_author_account_id", on_delete: :nullify
+  add_foreign_key "private_media_objects", "accounts"
   add_foreign_key "quotes", "accounts", column: "quoted_account_id", on_delete: :nullify
   add_foreign_key "quotes", "accounts", on_delete: :cascade
   add_foreign_key "quotes", "statuses", column: "quoted_status_id", on_delete: :nullify

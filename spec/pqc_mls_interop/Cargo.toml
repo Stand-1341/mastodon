@@ -1,0 +1,22 @@
+[package]
+name = "mastodon-openmls-interop"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+openmls = { version = "=0.9.1", features = [
+  "openmls_rust_crypto",
+  "draft-ietf-mls-pq-ciphersuites",
+] }
+openmls_basic_credential = { version = "=0.6.0", features = [
+  "draft-ietf-mls-pq-ciphersuites",
+] }
+openmls_rust_crypto = { version = "=0.6.0", features = [
+  "draft-ietf-mls-pq-ciphersuites",
+] }
+openmls_traits = { version = "=0.6.0", features = [
+  "draft-ietf-mls-pq-ciphersuites",
+] }
+serde_json = "1"

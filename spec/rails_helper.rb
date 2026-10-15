@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
-ENV['RAILS_ENV'] ||= 'test'
+# Compose sets RAILS_ENV=development for the running app. Specs must always
+# boot against the isolated test database, never the development instance.
+ENV['RAILS_ENV'] = 'test'
 
 # This needs to be defined before Rails is initialized
 STREAMING_PORT = ENV.fetch('TEST_STREAMING_PORT', '4020')

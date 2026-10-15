@@ -14,6 +14,7 @@ gem 'pg', '~> 1.5'
 gem 'pghero'
 
 gem 'aws-sdk-core', require: false
+gem 'aws-sdk-kms', '~> 1.0', require: false
 gem 'aws-sdk-s3', '~> 1.123', require: false
 gem 'blurhash', '~> 0.1'
 gem 'fog-core', '<= 2.6.0'

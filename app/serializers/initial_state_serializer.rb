@@ -45,6 +45,7 @@ class InitialStateSerializer < ActiveModel::Serializer
 
     store[:disabled_account_id] = object.disabled_account.id.to_s if object.disabled_account
     store[:moved_to_account_id] = object.moved_to_account.id.to_s if object.moved_to_account
+    store[:pqc_e2ee_experimental] = ENV['PQC_E2EE_EXPERIMENTAL'] == 'true'
 
     store[:owner] = object.owner&.id&.to_s if Rails.configuration.x.single_user_mode
 

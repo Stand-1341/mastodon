@@ -34,4 +34,5 @@
   /statuses/(*any)
   /overview
   /overview/about
+  /pqc
 ).each { |path| get path, to: 'home#index' }

@@ -8,6 +8,7 @@ import { NavLink, useRouteMatch } from 'react-router-dom';
 import AddIcon from '@/material-icons/400-24px/add.svg?react';
 import HomeActiveIcon from '@/material-icons/400-24px/home-fill.svg?react';
 import HomeIcon from '@/material-icons/400-24px/home.svg?react';
+import LockIcon from '@/material-icons/400-24px/lock.svg?react';
 import MenuIcon from '@/material-icons/400-24px/menu.svg?react';
 import NotificationsActiveIcon from '@/material-icons/400-24px/notifications-fill.svg?react';
 import NotificationsIcon from '@/material-icons/400-24px/notifications.svg?react';
@@ -19,7 +20,11 @@ import { Icon } from 'mastodon/components/icon';
 import { IconWithBadge } from 'mastodon/components/icon_with_badge';
 import type { MastodonLocationDescriptor } from 'mastodon/components/router';
 import { useIdentity } from 'mastodon/identity_context';
-import { registrationsOpen, sso_redirect } from 'mastodon/initial_state';
+import {
+  pqcE2eeExperimental,
+  registrationsOpen,
+  sso_redirect,
+} from 'mastodon/initial_state';
 import { selectUnreadNotificationGroupsCount } from 'mastodon/selectors/notifications';
 import { useAppDispatch, useAppSelector } from 'mastodon/store';
 
@@ -32,6 +37,10 @@ export const messages = defineMessages({
     defaultMessage: 'Notifications',
   },
   menu: { id: 'tabs_bar.menu', defaultMessage: 'Menu' },
+  pqcMessaging: {
+    id: 'tabs_bar.pqc_messaging',
+    defaultMessage: 'Encrypted messaging (experimental)',
+  },
   advancedUiQuickLinks: {
     id: 'tabs_bar.quick_links',
     defaultMessage: 'Quick links',
@@ -196,6 +205,13 @@ export const NavigationBar: React.FC = () => {
               icon={<Icon id='' icon={AddIcon} />}
             />
             <NotificationsButton />
+            {pqcE2eeExperimental && (
+              <IconLabelButton
+                title={intl.formatMessage(messages.pqcMessaging)}
+                to='/pqc'
+                icon={<Icon id='' icon={LockIcon} />}
+              />
+            )}
           </>
         )}
 

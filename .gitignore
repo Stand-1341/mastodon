@@ -19,6 +19,8 @@
 /tmp
 /coverage
 /public/system
+/spec/pqc_mls_interop/target/
+/storage/pqc-private-media/
 /public/assets
 /public/packs
 /public/packs-dev
@@ -39,6 +41,10 @@ node_modules/
 # Ignore postgres + redis + elasticsearch volume optionally created by docker-compose
 /postgres
 /postgres14
+/postgres18-pqc
+/postgres14-pre-pqc.sql
+/secrets/postgres-tls
+/secrets/postgres-superuser-password
 /redis
 /elasticsearch
 

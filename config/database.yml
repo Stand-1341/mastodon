@@ -9,12 +9,35 @@
 
   db_sslrootcerts = { 'DB_SSLROOTCERT' => ENV['DB_SSLROOTCERT'] }.compact
   db_url_parser = URI::RFC2396_Parser.new
-  %w(DATABASE_URL PRIMARY_DATABASE_URL REPLICA_DATABASE_URL).each do |name|
+  database_urls = %w(DATABASE_URL PRIMARY_DATABASE_URL REPLICA_DATABASE_URL)
+  if ENV['PQC_REQUIRE_HYBRID_DB_TLS'] == 'true'
+    expected_ca = ENV.fetch('PQC_HYBRID_DB_TLS_CA_PATH', '/run/pqc-postgres-tls/ca.crt')
+    unless ENV['DB_HOST'] == 'db' && ENV['DB_SSLMODE'] == 'verify-full' && ENV['DB_SSLROOTCERT'] == expected_ca
+      raise ArgumentError, 'PQC_REQUIRE_HYBRID_DB_TLS requires DB_HOST=db, DB_SSLMODE=verify-full, and the configured PostgreSQL CA'
+    end
+    if ENV['REPLICA_DB_HOST'].present? && ENV['REPLICA_DB_HOST'] != 'db'
+      raise ArgumentError, 'PQC_REQUIRE_HYBRID_DB_TLS requires REPLICA_DB_HOST=db'
+    end
+  end
+
+  database_urls.each do |name|
     next unless ENV[name]
 
     # Match Active Record's URL decoding: '+' is literal, not a space.
-    params = (db_url_parser.parse(ENV[name]).query || '').split('&').map { |pair| pair.split('=', 2) }.to_h
+    parsed_url = db_url_parser.parse(ENV[name])
+    params = (parsed_url.query || '').split('&').map { |pair| pair.split('=', 2) }.to_h
     params.transform_values! { |value| value && db_url_parser.unescape(value) }
+    if ENV['PQC_REQUIRE_HYBRID_DB_TLS'] == 'true'
+      unless parsed_url.host == 'db'
+        raise ArgumentError, "PQC_REQUIRE_HYBRID_DB_TLS requires #{name} to connect to db"
+      end
+      if params['sslmode'].present? && params['sslmode'] != 'verify-full'
+        raise ArgumentError, "PQC_REQUIRE_HYBRID_DB_TLS requires #{name} sslmode=verify-full"
+      end
+      if params['sslrootcert'].present? && params['sslrootcert'] != '/run/pqc-postgres-tls/ca.crt'
+        raise ArgumentError, "PQC_REQUIRE_HYBRID_DB_TLS requires #{name} to use the configured PostgreSQL CA"
+      end
+    end
     if params.key?('sslmode') && !db_sslmodes.include?(params['sslmode'])
       raise ArgumentError, "Invalid sslmode in #{name}: #{params['sslmode'].inspect}"
     end

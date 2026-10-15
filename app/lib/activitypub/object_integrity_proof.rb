@@ -11,6 +11,14 @@ class ActivityPub::ObjectIntegrityProof
     @json = json.is_a?(Hash) ? json.deep_stringify_keys : json
   end
 
+  def self.context_list(context)
+    case context
+    when Array then context
+    when nil then []
+    else [context]
+    end
+  end
+
   def verify_actor!(proof_purpose: 'assertionMethod', force_key_refresh: false)
     return unless @json.is_a?(Hash) && @json['proof'].is_a?(Hash)
 
@@ -54,7 +62,7 @@ class ActivityPub::ObjectIntegrityProof
     raise ArgumentError, 'Refusing to replace an existing proof or signature' if @json.key?('proof') || @json.key?('signature')
 
     document = @json.deep_dup
-    document['@context'] = (Array(document['@context']) + [CONTEXT]).uniq
+    document['@context'] = (self.class.context_list(document['@context']) + [CONTEXT]).uniq
     expires_at = expires_in.from_now.utc
     expires_at = [expires_at, key.expires_at].min if key.expires_at.present?
     raise ArgumentError, 'Proof expiration must be in the future' unless expires_at.future?

@@ -76,10 +76,15 @@ matching are checked at connection time. Rails leaves libpq's special URL
 
 ## Local development and unsafe compatibility
 
-Keep `DB_SSLMODE=disable` for the existing isolated local PostgreSQL service that
-has no TLS configured. Nothing here provisions PostgreSQL server-side TLS or
-changes the local Compose opt-out. Streaming also retains its explicit empty
-`DB_SSLMODE` plaintext opt-out. Rails rejects an empty mode; use `disable`.
+The `.devcontainer` PostgreSQL service provisions a conventional local CA and
+`db` hostname certificate in persistent Docker volumes. Rails and streaming use
+`DB_SSLMODE=verify-full`; only the CA certificate is mounted read-only into the
+app container. This is for local TLS behavior and does not provide PQC TLS.
+The root production `docker-compose.yml` database still has no TLS configured;
+provision server-side TLS before using the production defaults. Other local
+PostgreSQL services without TLS may use `DB_SSLMODE=disable` in their local
+environment only. Streaming retains its explicit empty `DB_SSLMODE` plaintext
+opt-out. Rails rejects an empty mode; use `disable`.
 
 **`DB_SSLMODE=no-verify` is unsafe, streaming-only compatibility.** It encrypts
 traffic but disables certificate/hostname authentication, making the connection
@@ -89,6 +94,173 @@ these settings as a fix for a missing CA or hostname mismatch. Rails/libpq does
 not support the `no-verify` mode name.
 
 ## Validation and post-quantum scope
+
+### Local PostgreSQL hybrid TLS
+
+The optional `.devcontainer` `pqc-edge` service has a Docker health check that
+performs a verified TLS 1.3 handshake against its own Nginx listener while
+forcing `X25519MLKEM768`. It checks the generated certificate and hostname as
+well as the negotiated group. Inspect it with:
+
+```sh
+docker compose --profile pqc ps pqc-edge
+docker compose --profile pqc exec pqc-edge /usr/local/bin/verify-pqc-edge.sh
+```
+
+The optional local edge permits only TLS 1.3 and `X25519MLKEM768`; clients
+without hybrid-group support will fail to connect. Its certificate still uses
+conventional RSA authentication.
+
+The `.devcontainer` primary `db` service now runs PostgreSQL 18 and forces
+`ssl_groups=X25519MLKEM768`; its HBA rules reject unencrypted TCP connections,
+and TLS connections fail if the client cannot negotiate that hybrid group. It
+uses `DB_SSLMODE=verify-full`. A local RSA CA and server
+certificate authenticate the `db` hostname; the CA and server private key stay
+in separate Docker volumes, and the app receives only the CA certificate.
+PostgreSQL data uses a separate volume. The previous PostgreSQL 14 data volume
+is retained by the opt-in `db-legacy` service under the `legacy-db` profile.
+
+### Production Compose PostgreSQL hybrid TLS overlay
+
+The root `docker-compose.yml` stays compatible with its existing PostgreSQL 14
+data. For a planned migration, `docker-compose.pqc.yml` provides an explicit
+PostgreSQL 18 overlay. It uses a separate `./postgres18-pqc` data directory,
+requires externally provisioned `./secrets/postgres-tls/ca.crt`, `server.crt`,
+and `server.key`, plus `./secrets/postgres-superuser-password`. Generate and
+protect the superuser secret before starting the overlay:
+
+```sh
+mkdir -p ./secrets
+openssl rand -hex 32 | tr -d '\n' > ./secrets/postgres-superuser-password
+chmod 600 ./secrets/postgres-superuser-password
+```
+
+Keep a secure backup of this secret; it is needed to administer the restored
+database. The secret file is excluded from Git and mounted into PostgreSQL as a
+Docker secret. The overlay requires SCRAM password authentication for TCP
+connections, in addition to TLS. It refuses to start if the certificate chain,
+`db` hostname, or certificate/private-key match is invalid. The server enforces
+only `X25519MLKEM768`, and dedicated `pg_hba.conf` rules reject plaintext TCP
+connections. Web, streaming, and Sidekiq use `DB_HOST=db`,
+`DB_SSLMODE=verify-full`, and the mounted CA.
+
+Do not point PostgreSQL 18 at `./postgres14` or start this overlay on an
+unmigrated production database. Use a maintenance window and perform a logical
+dump/restore into the new directory. First synchronize the existing Mastodon
+database role password with `DB_PASS` in `.env.production` and store SCRAM
+hashes, then set the `postgres` role password to the exact superuser secret.
+The overlay builds the fork's Rails and streaming images from this checkout,
+replacing the upstream images selected in the base Compose file. Build all
+images and validate the merged configuration before the maintenance window:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.pqc.yml config -q
+docker compose -f docker-compose.yml -f docker-compose.pqc.yml build db web streaming
+```
+
+Use a password prompt so plaintext passwords are not written into shell history
+or SQL logs:
+
+```sh
+docker compose stop web streaming sidekiq
+docker compose exec -it db psql -U postgres -d postgres
+```
+
+In that `psql` session:
+
+```sql
+SET password_encryption = 'scram-sha-256';
+\password mastodon
+\password postgres
+```
+
+For `mastodon`, enter the existing `DB_PASS` value. For `postgres`, enter the
+value from `./secrets/postgres-superuser-password`. Exit `psql`, then dump and
+restore:
+
+```sh
+docker compose exec -T db pg_dumpall -U postgres > ./postgres14-pre-pqc.sql
+test -s ./postgres14-pre-pqc.sql
+docker compose stop db
+docker compose -f docker-compose.yml -f docker-compose.pqc.yml up -d db
+docker compose -f docker-compose.yml -f docker-compose.pqc.yml exec -T db \
+  psql -U postgres -d postgres -v ON_ERROR_STOP=1 < ./postgres14-pre-pqc.sql
+docker compose -f docker-compose.yml -f docker-compose.pqc.yml exec -T db \
+  psql -U postgres -d postgres -c 'SELECT datname FROM pg_database ORDER BY datname'
+```
+
+`pg_dumpall` includes role password hashes and all databases. Store the dump on
+protected storage and delete it securely after the restored backup is verified.
+Treat it and the superuser secret as credentials. The dump path and secret are
+gitignored. Keep `./postgres14` untouched during validation.
+Only after checking the restored roles, schema, and data, start web, streaming,
+and Sidekiq with the overlay. Set ActivityPub signing and messaging feature
+flags explicitly in `.env.production`; building these fork images does not
+enable them. Rolling back after the PostgreSQL 18 instance has
+accepted writes requires another data migration; simply starting PostgreSQL 14
+would lose those writes.
+
+A `PQC_REQUIRE_HYBRID_DB_TLS` startup guard checks
+the Rails and streaming database configurations and rejects conflicting DB URL
+hosts or TLS options. Keep the CA certificate public;
+protect the server private key as a deployment secret. The entrypoint copies
+the key into a private volume with PostgreSQL-required ownership and mode.
+
+The merged configuration can be checked independently:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.pqc.yml config -q
+```
+
+After restoring data, start web, streaming, and Sidekiq with the same two-file
+Compose command and confirm the database TLS group on live connections. The
+certificate remains conventionally signed; the post-quantum property here is
+hybrid key exchange.
+
+The streaming TLS configuration guard can be exercised with:
+
+```sh
+docker compose -f docker-compose.yml -f docker-compose.pqc.yml exec -T streaming node streaming/test/db-hybrid-config.mjs
+```
+
+Check the actual app connection:
+
+```sh
+docker compose exec -T app bin/rails runner 'p ActiveRecord::Base.connection.select_one("SELECT ssl, version, cipher FROM pg_stat_ssl WHERE pid = pg_backend_pid()")'
+```
+
+This must report `ssl: true` and `TLSv1.3`. Since the server allows only the
+hybrid group, a successful verified Rails connection also confirms libpq
+negotiated it. Independently force and display the group from the app container:
+
+```sh
+docker compose exec -T app openssl s_client -brief -starttls postgres \
+  -connect db:5432 -groups X25519MLKEM768 \
+  -CAfile /run/pqc-postgres-tls/ca.crt -verify_hostname db -verify_return_error
+```
+
+The handshake must show `Negotiated TLS1.3 group: X25519MLKEM768`,
+`Verification: OK`, and `Verified peername: db`. The live local deployment was
+verified with PostgreSQL 18.6 and OpenSSL 3.5.9. The existing PostgreSQL 14
+data was dumped, restored into the new volume, and checked through Rails; the
+development database retained its account records and all 639 migration rows.
+
+Verify Node streaming's `pg` client against the same hybrid-only server with:
+
+```sh
+docker compose exec -T app node streaming/test/db-hybrid-postgres.mjs
+```
+
+The check requires TLS 1.3 and `ssl_groups=X25519MLKEM768` and reports the
+negotiated TLS version and cipher. It uses the same CA and `verify-full` policy
+as the running streaming service.
+
+For rollback, stop the app, start `db-legacy` with
+`docker compose --profile legacy-db up -d db-legacy`, then set `DB_HOST=db-legacy`
+and `DB_SSLROOTCERT=/run/postgres-tls/ca.crt` in the Compose environment and
+recreate the app. The old PostgreSQL 14 volume is kept intact. Do not attach a
+PostgreSQL 14 data directory to PostgreSQL 18; use a logical dump/restore when
+migrating another existing installation.
 
 Run the streaming suite in the existing app container:
 
@@ -106,10 +278,10 @@ The Rails regression suite is `spec/lib/pqc_db_ssl_defaults_spec.rb`. Use
 `RAILS_ENV=test`, `DB_NAME=mastodon_local_validation` (Rails adds `_test`), and
 isolated Redis database 15 when running it in the local container.
 
-Hybrid key exchange and certificate signing are separate concerns: an
-`X25519MLKEM768` handshake may authenticate with a conventional RSA/ECDSA
-certificate. OpenSSL 3.5 runtime capabilities do not prove PostgreSQL or Node
-negotiated that group, and ML-DSA signing support does not require replacing
-public web certificates. This configuration makes no claim of public endpoint
-verification or negotiated hybrid PostgreSQL TLS. It does not change nginx,
-startup configuration, or the local HTTP-only topology.
+Hybrid key exchange and certificate signing are separate concerns: the local
+PostgreSQL connection negotiates `X25519MLKEM768` while authenticating the
+server with a conventional RSA certificate. This verifies the local Rails/libpq
+path. It does not prove hybrid negotiation for Node streaming or a production
+database deployment. The production `docker-compose.yml` and public CA/TLS
+deployment still need their own configuration and endpoint tests; ML-DSA
+signing does not require replacing public web certificates.
