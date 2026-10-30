@@ -1,25 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FC, SyntheticEvent } from 'react';
 
-import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 import type { ClientState } from 'ts-mls';
 
 import { Column } from '@/mastodon/components/column';
 import { ColumnHeader } from '@/mastodon/components/column_header';
 import { useCurrentAccountId } from '@/mastodon/hooks/useAccountId';
 
-import { DRAFT_PQC_MLS_CIPHERSUITE_ID } from './cipher_suite_ids';
 import { acquirePqcDeviceSessionLock } from './device_session_lock';
 import {
+  PQC_MLS_CIPHERSUITE_ID,
   addPqcGroupMember,
   createPqcApplicationMessage,
   createPqcGroup,
   createPqcMlsContext,
   deserializePqcGroupState,
+  createPqcAttachmentEnvelope,
+  decodePqcAttachmentEnvelope,
   fingerprintPublicKey,
   getPqcDeviceCiphersuiteId,
   generatePqcDeviceKeyPackage,
-  LEGACY_PQC_MLS_CIPHERSUITE_ID,
   joinPqcGroup,
   processPqcMessage,
   pqcDeviceAuthPublicKey,
@@ -31,6 +31,7 @@ import {
   serializePqcGroupState,
   signPqcDeviceRequest,
   trustPqcDevice,
+  verifyPqcDeviceBinding,
 } from './mls_client';
 import type { PqcDeviceKeyPackage, PqcMlsContext } from './mls_client';
 import {
@@ -111,6 +112,8 @@ interface PqcDisplayMessage {
   id: number;
   sender: string;
   text: string;
+  attachment?: { name: string; mediaType: string; data: string };
+  attachmentUnavailable?: boolean;
 }
 
 interface LocalRecoveryRecord {
@@ -123,8 +126,6 @@ interface LocalRecoveryRecord {
     publicPackage: string;
     keyPackageMessage: string;
     privatePackage: string;
-    deviceAuthPublicKey?: string;
-    deviceAuthPrivateKey?: string;
   };
   activeConversations?: {
     conversation: PqcConversation;
@@ -172,42 +173,16 @@ const restorePqcDeviceKeyPackage = async (
     publicPackage: decodeBase64(savedDevice.publicPackage),
     keyPackageMessage: decodeBase64(savedDevice.keyPackageMessage),
     privatePackage: decodeBase64(savedDevice.privatePackage),
-    deviceAuthPublicKey: new Uint8Array(),
-    deviceAuthPrivateKey: savedDevice.deviceAuthPrivateKey
-      ? decodeBase64(savedDevice.deviceAuthPrivateKey)
-      : undefined,
   };
 
   try {
-    if (keyPackage.deviceAuthPrivateKey) {
-      keyPackage.deviceAuthPublicKey = savedDevice.deviceAuthPublicKey
-        ? decodeBase64(savedDevice.deviceAuthPublicKey)
-        : new Uint8Array();
-      const derivedPublicKey = ml_dsa87.getPublicKey(
-        keyPackage.deviceAuthPrivateKey,
+    if (
+      (await fingerprintPublicKey(pqcDeviceAuthPublicKey(keyPackage))) !==
+      savedDevice.fingerprint
+    ) {
+      throw new Error(
+        'The saved device key does not match its registered fingerprint',
       );
-      if (
-        derivedPublicKey.length !== 2592 ||
-        keyPackage.deviceAuthPublicKey.length !== derivedPublicKey.length ||
-        !derivedPublicKey.every(
-          (byte, index) => byte === keyPackage.deviceAuthPublicKey[index],
-        )
-      ) {
-        throw new Error(
-          'The saved device authentication keypair does not match',
-        );
-      }
-    } else {
-      // Legacy recovery records used the MLS signing key for device authentication.
-      keyPackage.deviceAuthPublicKey = pqcDeviceAuthPublicKey(keyPackage);
-      if (
-        (await fingerprintPublicKey(keyPackage.deviceAuthPublicKey)) !==
-        savedDevice.fingerprint
-      ) {
-        throw new Error(
-          'The saved device key does not match its registered fingerprint',
-        );
-      }
     }
 
     return keyPackage;
@@ -224,9 +199,6 @@ export const PqcMessagingPage: FC = () => {
     ? `mastodon:pqc:recovery:v1:${currentAccountId}`
     : null;
   const [device, setDevice] = useState<LocalDeviceSession | null>(null);
-  const [newDeviceCipherSuiteId, setNewDeviceCipherSuiteId] = useState(
-    LEGACY_PQC_MLS_CIPHERSUITE_ID,
-  );
   const [recoveryPassphrase, setRecoveryPassphrase] = useState('');
   const [passphraseVerification, setPassphraseVerification] = useState('');
   const [replacementPassphrase, setReplacementPassphrase] = useState('');
@@ -251,6 +223,7 @@ export const PqcMessagingPage: FC = () => {
   const [memberAccountId, setMemberAccountId] = useState('');
   const [removeMemberAccountId, setRemoveMemberAccountId] = useState('');
   const [draft, setDraft] = useState('');
+  const [attachment, setAttachment] = useState<File | null>(null);
   const [messages, setMessages] = useState<PqcDisplayMessage[]>([]);
   const [fingerprintsConfirmed, setFingerprintsConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -429,7 +402,7 @@ export const PqcMessagingPage: FC = () => {
         await publishPqcKeyPackage(
           currentDevice.apiDevice.id,
           nextKeyPackage.keyPackageMessage,
-          nextKeyPackage.deviceAuthPublicKey,
+          pqcDeviceAuthPublicKey(nextKeyPackage),
         );
         currentDevice = { ...currentDevice, keyPackage: nextKeyPackage };
         setDevice(currentDevice);
@@ -447,12 +420,26 @@ export const PqcMessagingPage: FC = () => {
         payload,
       );
       nextState = processed.state;
-      if (processed.kind === 'application')
+      if (processed.kind === 'application') {
+        const decodedAttachment = await decodePqcAttachmentEnvelope(
+          processed.plaintext,
+        );
         received.push({
           id: message.id,
           sender: message.sender_account_id,
-          text: processed.plaintext,
+          text: decodedAttachment
+            ? (decodedAttachment.envelope.caption ??
+              'Verified encrypted attachment')
+            : processed.plaintext,
+          attachment: decodedAttachment
+            ? {
+                name: decodedAttachment.envelope.name,
+                mediaType: decodedAttachment.envelope.mediaType,
+                data: decodedAttachment.envelope.data,
+              }
+            : undefined,
         });
+      }
     }
 
     if (nextState) {
@@ -511,14 +498,33 @@ export const PqcMessagingPage: FC = () => {
       keyPackage = await generatePqcDeviceKeyPackage(
         actorUri,
         deviceId,
-        newDeviceCipherSuiteId,
+        PQC_MLS_CIPHERSUITE_ID,
       );
       const apiDevice = await registerPqcDevice(
         deviceId,
         keyPackage.fingerprint,
-        keyPackage.deviceAuthPublicKey,
+        pqcDeviceAuthPublicKey(keyPackage),
         keyPackage.keyPackageMessage,
       );
+      if (
+        !(await verifyPqcDeviceBinding(
+          apiDevice.device_binding,
+          actorUri,
+          deviceId,
+          keyPackage.fingerprint,
+        ))
+      ) {
+        await saveRecovery(
+          { accountId, actorUri, apiDevice, keyPackage },
+          recoveredConversations,
+          recoveryPassphrase,
+          recoveryStorageKey,
+        );
+        setRecoveryAvailable(true);
+        throw new Error(
+          'The server could not prove this device belongs to your account',
+        );
+      }
       const session = { accountId, actorUri, apiDevice, keyPackage };
       await saveRecovery(
         session,
@@ -569,6 +575,17 @@ export const PqcMessagingPage: FC = () => {
       if (!apiDevice)
         throw new Error(
           'This device is revoked or no longer matches the saved recovery record',
+        );
+      if (
+        !(await verifyPqcDeviceBinding(
+          apiDevice.device_binding,
+          savedDevice.actorUri,
+          savedDevice.apiDevice.device_id,
+          savedDevice.fingerprint,
+        ))
+      )
+        throw new Error(
+          'This device no longer has a valid account ML-DSA-87 binding',
         );
       if (apiDevice.revocation_pending)
         throw new Error(
@@ -1961,7 +1978,7 @@ export const PqcMessagingPage: FC = () => {
           await publishPqcKeyPackage(
             device.apiDevice.id,
             nextKeyPackage.keyPackageMessage,
-            nextKeyPackage.deviceAuthPublicKey,
+            pqcDeviceAuthPublicKey(nextKeyPackage),
           );
           nextDevice = { ...device, keyPackage: nextKeyPackage };
           setDevice(nextDevice);
@@ -2065,7 +2082,7 @@ export const PqcMessagingPage: FC = () => {
   const sendMessage = async (event: SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
     await withBusy(async () => {
-      if (!device || !active || !draft.trim()) return;
+      if (!device || !active || (!draft.trim() && !attachment)) return;
       if (!active.state)
         throw new Error('Join the conversation before sending messages');
       if (active.pendingMemberRemoval || active.pendingDeviceRemoval)
@@ -2103,7 +2120,12 @@ export const PqcMessagingPage: FC = () => {
           'Queued messages were retried. Submit the draft again if it was not already sent.',
         );
       }
-      const text = draft.trim();
+      const text = attachment
+        ? JSON.stringify({
+            ...(await createPqcAttachmentEnvelope(attachment)),
+            caption: draft.trim(),
+          })
+        : draft.trim();
       const sent = await createPqcApplicationMessage(
         active.context,
         active.state,
@@ -2139,7 +2161,13 @@ export const PqcMessagingPage: FC = () => {
       );
       const nextMessages = [
         ...active.messages,
-        { id: relayMessage.id, sender: 'You', text: draft.trim() },
+        {
+          id: relayMessage.id,
+          sender: 'You',
+          text: attachment
+            ? `Encrypted attachment: ${attachment.name}`
+            : draft.trim(),
+        },
       ].slice(-MAX_RECOVERED_MESSAGES);
       const nextActive = {
         ...queued,
@@ -2161,6 +2189,7 @@ export const PqcMessagingPage: FC = () => {
       );
       setMessages(nextMessages);
       setDraft('');
+      setAttachment(null);
     });
   };
 
@@ -2241,33 +2270,10 @@ export const PqcMessagingPage: FC = () => {
             )}
             {!device && !recoveryAvailable && (
               <>
-                <label htmlFor='pqc-new-device-suite'>
-                  MLS cipher suite for this device
-                </label>
-                <select
-                  id='pqc-new-device-suite'
-                  value={newDeviceCipherSuiteId}
-                  disabled={busy}
-                  onChange={(event) => {
-                    setNewDeviceCipherSuiteId(
-                      Number(event.currentTarget.value),
-                    );
-                  }}
-                >
-                  <option value={LEGACY_PQC_MLS_CIPHERSUITE_ID}>
-                    Existing experimental suite (0xf011)
-                  </option>
-                  <option value={DRAFT_PQC_MLS_CIPHERSUITE_ID}>
-                    Draft hybrid suite (0x0052, requires matching devices)
-                  </option>
-                </select>
-                {newDeviceCipherSuiteId === DRAFT_PQC_MLS_CIPHERSUITE_ID && (
-                  <p>
-                    Draft suite 0x0052 interoperates with the pinned OpenMLS
-                    test peer. Its codepoint is provisional, so use it only
-                    between matching test clients.
-                  </p>
-                )}
+                <p>
+                  New devices use the X-Wing and ML-DSA-87 suite. All devices in
+                  a conversation must use the same suite.
+                </p>
                 <button
                   type='button'
                   className='button'
@@ -2912,6 +2918,17 @@ export const PqcMessagingPage: FC = () => {
                   }}
                   maxLength={10_000}
                 />
+                <label htmlFor='pqc-message-attachment'>
+                  Encrypted attachment (max 512 KiB)
+                </label>
+                <input
+                  id='pqc-message-attachment'
+                  type='file'
+                  disabled={busy}
+                  onChange={(event) => {
+                    setAttachment(event.currentTarget.files?.[0] ?? null);
+                  }}
+                />
                 <button
                   type='submit'
                   className='button'
@@ -2922,7 +2939,7 @@ export const PqcMessagingPage: FC = () => {
                       active.pendingMemberRemoval ??
                       active.pendingDeviceRemoval,
                     ) ||
-                    !draft.trim()
+                    (!draft.trim() && !attachment)
                   }
                 >
                   Encrypt and send
@@ -2932,6 +2949,20 @@ export const PqcMessagingPage: FC = () => {
                 {messages.map((message) => (
                   <li key={message.id}>
                     <strong>{message.sender}:</strong> {message.text}
+                    {message.attachment && (
+                      <a
+                        download={message.attachment.name}
+                        href={`data:application/octet-stream;base64,${message.attachment.data}`}
+                      >
+                        Download verified attachment
+                      </a>
+                    )}
+                    {message.attachmentUnavailable && (
+                      <span>
+                        {' '}
+                        Attachment bytes are not included in device recovery.
+                      </span>
+                    )}
                   </li>
                 ))}
               </ol>
@@ -2950,6 +2981,18 @@ const contextForConversation = async (
 ): Promise<PqcMlsContext> => {
   const trustedDevices = new Map<string, string>();
   for (const memberDevice of conversation.member_devices) {
+    if (
+      !(await verifyPqcDeviceBinding(
+        memberDevice.device_binding,
+        memberDevice.actor_uri,
+        memberDevice.device_id,
+        memberDevice.fingerprint,
+      ))
+    )
+      throw new Error(
+        `Device ${memberDevice.device_id} has no valid account ML-DSA-87 binding; register it again before using this conversation`,
+      );
+
     trustPqcDevice(
       trustedDevices,
       `${memberDevice.actor_uri}\n${memberDevice.device_id}\n${memberDevice.fingerprint}`,
@@ -2988,10 +3031,6 @@ const saveRecovery = async (
       publicPackage: encodeBase64(device.keyPackage.publicPackage),
       keyPackageMessage: encodeBase64(device.keyPackage.keyPackageMessage),
       privatePackage: encodeBase64(device.keyPackage.privatePackage),
-      deviceAuthPublicKey: encodeBase64(device.keyPackage.deviceAuthPublicKey),
-      deviceAuthPrivateKey: device.keyPackage.deviceAuthPrivateKey
-        ? encodeBase64(device.keyPackage.deviceAuthPrivateKey)
-        : undefined,
     },
     activeConversations: recoveredConversations.flatMap(
       ({
@@ -3012,7 +3051,13 @@ const saveRecovery = async (
             conversation,
             serializedState: encodeBase64(serializePqcGroupState(state)),
             lastMessageId,
-            messages,
+            // Keep large file bytes out of recovery storage and report their
+            // omission to users after they restore the device.
+            messages: messages.map(({ attachment, ...message }) => ({
+              ...message,
+              attachmentUnavailable:
+                Boolean(attachment) || message.attachmentUnavailable,
+            })),
             pendingOutbound,
             pendingMemberAddition,
             pendingMemberRemoval,
@@ -3246,12 +3291,14 @@ const sameAccountDeviceFingerprints = (
       actor_uri,
       device_id,
       fingerprint,
+      device_binding,
     }) => ({
       id,
       account_id: packageAccountId,
       actor_uri,
       device_id,
       fingerprint,
+      device_binding,
       revocation_pending: false,
     }),
   );
@@ -3284,13 +3331,14 @@ const conversationWithPendingMember = (
     ]),
   );
   addition.keyPackages.forEach(
-    ({ id, account_id, actor_uri, device_id, fingerprint }) => {
+    ({ id, account_id, actor_uri, device_id, fingerprint, device_binding }) => {
       devicesById.set(device_id, {
         id,
         account_id,
         actor_uri,
         device_id,
         fingerprint,
+        device_binding,
         revocation_pending: false,
       });
     },

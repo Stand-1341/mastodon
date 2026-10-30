@@ -22,7 +22,7 @@ RSpec.describe ActivityPub::PqcSigning do
     it 'preserves RSA-only signing without querying or generating PQC keys' do
       rsa_key = account.keypair(type: :rsa)
       allow(account).to receive(:keypair).and_call_original
-      allow(account).to receive(:keypair).with(type: :'ml-dsa-44').and_raise('Unexpected PQC key lookup')
+      allow(account).to receive(:keypair).with(type: :'ml-dsa-87').and_raise('Unexpected PQC key lookup')
 
       ClimateControl.modify PQC_ACTIVITYPUB_SIGNING: nil do
         expect(signed['signature']).to include('type' => 'RsaSignature2017', 'creator' => rsa_key.full_uri)
@@ -51,18 +51,18 @@ RSpec.describe ActivityPub::PqcSigning do
       expect(Keypair.count).to eq(key_count)
     end
 
-    context 'with a native ML-DSA-44 key' do
+    context 'with a native ML-DSA-87 key' do
       let!(:pqc_key) do
-        generate_real_ml_dsa_44_key
+        generate_real_ml_dsa_87_key
         ActivityPub::GeneratePqcKeyService.new.call(account)
       end
       let(:receiver_actor) { Fabricate(:remote_account, uri: ActivityPub::TagManager.instance.uri_for(account)) }
 
       before do
-        generate_real_ml_dsa_44_key
+        generate_real_ml_dsa_87_key
         rsa_key = account.keypair(type: :rsa)
         Fabricate(:keypair, account: receiver_actor, type: :rsa, uri: rsa_key.full_uri, public_key: rsa_key.public_key)
-        Fabricate(:keypair, account: receiver_actor, type: :'ml-dsa-44', uri: pqc_key.full_uri, public_key: pqc_key.public_key)
+        Fabricate(:keypair, account: receiver_actor, type: :'ml-dsa-87', uri: pqc_key.full_uri, public_key: pqc_key.public_key)
       end
 
       it 'produces a document independently verifiable by both RSA and ML-DSA verifiers' do
@@ -70,7 +70,7 @@ RSpec.describe ActivityPub::PqcSigning do
         original_document = document.deep_dup
 
         expect(signed['signature']['type']).to eq('RsaSignature2017')
-        expect(signed['proof']['cryptosuite']).to eq('mldsa44-jcs-2024')
+        expect(signed['proof']['cryptosuite']).to eq('mldsa87-jcs-2024')
         expect(ActivityPub::LinkedDataSignature.new(signed).verify_actor!).to eq(receiver_actor)
         expect(ActivityPub::ObjectIntegrityProof.new(signed.without('signature')).verify_actor!).to eq(receiver_actor)
         expect(account.keypair(type: :rsa).reload.attributes).to eq(original_rsa)
@@ -117,7 +117,7 @@ RSpec.describe ActivityPub::PqcSigning do
         travel_to 3.days.from_now do
           expect(ActivityPub::ObjectIntegrityProof.new(secured.without('signature')).verify_actor!).to be_nil
         end
-        receiver_actor.keypairs.where(type: :'ml-dsa-44').update_all(revoked: true)
+        receiver_actor.keypairs.where(type: :'ml-dsa-87').update_all(revoked: true)
 
         expect(ActivityPub::ObjectIntegrityProof.new(secured.without('signature')).verify_actor!).to be_nil
       end
@@ -135,7 +135,7 @@ RSpec.describe ActivityPub::PqcSigning do
         native_key = instance_double(OpenSSL::PKey::PKey)
         allow(native_key).to receive(:sign).and_raise(OpenSSL::PKey::PKeyError, 'provider unavailable')
         allow(pqc_key).to receive(:keypair).and_return(native_key)
-        allow(account).to receive(:keypair).with(type: :'ml-dsa-44').and_return(pqc_key)
+        allow(account).to receive(:keypair).with(type: :'ml-dsa-87').and_return(pqc_key)
 
         expect { signed }.to raise_error(described_class::SigningError, /Disable PQC_ACTIVITYPUB_SIGNING explicitly/)
       end

@@ -18,7 +18,7 @@ RSpec.describe ActivityPub::ObjectIntegrityProof, '#sign!' do
   end
 
   before do
-    generate_real_ml_dsa_44_key
+    generate_real_ml_dsa_87_key
   end
 
   it 'creates a verifiable ML-DSA proof without mutating the input' do
@@ -28,12 +28,12 @@ RSpec.describe ActivityPub::ObjectIntegrityProof, '#sign!' do
     expect(document).to eq(original)
     expect(secured['proof']).to include(
       'type' => 'DataIntegrityProof',
-      'cryptosuite' => 'mldsa44-jcs-2024',
+      'cryptosuite' => 'mldsa87-jcs-2024',
       'verificationMethod' => key.full_uri,
       'proofPurpose' => 'assertionMethod'
     )
-    expect(Multibase.decode(secured['proof']['proofValue']).bytesize).to eq(2420)
-    expect(described_class.verify_mldsa44_jcs_2024(secured, OpenSSL::PKey.read(key.public_key))).to be true
+    expect(Multibase.decode(secured['proof']['proofValue']).bytesize).to eq(4627)
+    expect(described_class.verify_mldsa_jcs_profile(secured, OpenSSL::PKey.read(key.public_key))).to be true
   end
 
   it 'binds the document content, proof options, and final context' do
@@ -47,7 +47,7 @@ RSpec.describe ActivityPub::ObjectIntegrityProof, '#sign!' do
     changed_context['@context'] << 'https://attacker.example/context'
 
     [changed_content, changed_key, changed_context].each do |tampered|
-      expect(described_class.verify_mldsa44_jcs_2024(tampered, public_key)).to be false
+      expect(described_class.verify_mldsa_jcs_profile(tampered, public_key)).to be false
     end
   end
 
@@ -56,13 +56,13 @@ RSpec.describe ActivityPub::ObjectIntegrityProof, '#sign!' do
     secured = described_class.new(document.merge('@context' => object_context)).sign!(account, sign_with: key)
 
     expect(secured['@context']).to eq([object_context, described_class::CONTEXT])
-    expect(described_class.verify_mldsa44_jcs_2024(secured, OpenSSL::PKey.read(key.public_key))).to be true
+    expect(described_class.verify_mldsa_jcs_profile(secured, OpenSSL::PKey.read(key.public_key))).to be true
   end
 
   it 'rejects signatures made with a different key' do
     secured = described_class.new(document).sign!(account, sign_with: key)
 
-    expect(described_class.verify_mldsa44_jcs_2024(secured, generate_real_ml_dsa_44_key)).to be false
+    expect(described_class.verify_mldsa_jcs_profile(secured, generate_real_ml_dsa_87_key)).to be false
   end
 
   it 'sets signed creation and expiration timestamps' do

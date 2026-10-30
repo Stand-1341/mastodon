@@ -16,7 +16,7 @@ class Pqc::ActivityPubSigningBenchmark
   def call
     raise ArgumentError, 'A persisted local account is required' unless @account&.persisted? && @account.local?
     raise ArgumentError, 'Benchmark iterations must be between 1 and 500' unless @iterations.between?(1, MAX_ITERATIONS)
-    raise ArgumentError, 'A usable ML-DSA-44 key must be provisioned for this account' unless @account.keypair(type: :'ml-dsa-44')&.usable?
+    raise ArgumentError, 'A usable ML-DSA-87 key must be provisioned for this account' unless @account.keypair(type: :'ml-dsa-87')&.usable?
     raise ArgumentError, 'A usable RSA key must be available for this account' unless @account.keypair(type: :rsa)&.usable?
 
     rsa_signer = ->(payload) { ActivityPub::LinkedDataSignature.new(payload).sign!(@account) }
@@ -36,9 +36,9 @@ class Pqc::ActivityPubSigningBenchmark
       iterations: @iterations,
       measurement: 'warm Rails signing path including key lookup, JSON-LD canonicalization, and cryptographic signing',
       rsa_only: rsa,
-      rsa_plus_ml_dsa44: dual,
+      rsa_plus_ml_dsa87: dual,
       incremental_median_ms: (dual[:median_ms] - rsa[:median_ms]).round(2),
-      ml_dsa_proof_bytes: 2420,
+      ml_dsa_proof_bytes: 4627,
     }
   ensure
     if defined?(previous_setting)

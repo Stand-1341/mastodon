@@ -10,7 +10,7 @@ RSpec.describe Rake::Task do
     subject(:task) { described_class['pqc:generate_key'] }
 
     let(:account) { Fabricate(:account, username: 'alice') }
-    let(:public_key) { synthetic_ml_dsa_44_public_key }
+    let(:public_key) { synthetic_ml_dsa_87_public_key }
     let(:private_key) { SigningKeysHelpers::PRIVATE_RSA_TEST_KEY }
     let(:native_key) { instance_double(OpenSSL::PKey::PKey, private_to_pem: private_key, public_to_pem: public_key) }
 
@@ -23,7 +23,7 @@ RSpec.describe Rake::Task do
     end
 
     before do
-      allow(OpenSSL::PKey).to receive(:generate_key).with('ML-DSA-44').and_return(native_key)
+      allow(OpenSSL::PKey).to receive(:generate_key).with('ML-DSA-87').and_return(native_key)
     end
 
     it 'provisions only the specified local account and outputs only the account and public key URI' do
@@ -31,23 +31,23 @@ RSpec.describe Rake::Task do
       other_account = Fabricate(:account)
 
       ClimateControl.modify PQC_ACTIVITYPUB_SIGNING: 'false' do
-        expect { task.invoke('alice') }.to output(%r{\AML-DSA-44 key available for @alice: https?://[^\n]+#ml-dsa-44-[a-f0-9]{32}\n\z}).to_stdout
+        expect { task.invoke('alice') }.to output(%r{\AML-DSA-87 key available for @alice: https?://[^\n]+#ml-dsa-87-[a-f0-9]{32}\n\z}).to_stdout
       end
 
-      expect(account.keypairs.find_by!(type: :'ml-dsa-44')).to have_attributes(public_key: public_key, private_key: private_key)
+      expect(account.keypairs.find_by!(type: :'ml-dsa-87')).to have_attributes(public_key: public_key, private_key: private_key)
       expect(other_account.keypairs.pluck(:type)).to eq(['rsa'])
     end
 
     it 'is idempotent when an administrator invokes it again' do
       account
 
-      expect { task.invoke('alice') }.to output(/ML-DSA-44 key available for @alice:/).to_stdout
+      expect { task.invoke('alice') }.to output(/ML-DSA-87 key available for @alice:/).to_stdout
       task.reenable
 
       expect do
-        expect { task.invoke('alice') }.to output(/ML-DSA-44 key available for @alice:/).to_stdout
+        expect { task.invoke('alice') }.to output(/ML-DSA-87 key available for @alice:/).to_stdout
       end.to_not change(Keypair, :count)
-      expect(OpenSSL::PKey).to have_received(:generate_key).with('ML-DSA-44').once
+      expect(OpenSSL::PKey).to have_received(:generate_key).with('ML-DSA-87').once
     end
 
     it 'explains that a missing argument requires one local username' do
@@ -85,7 +85,7 @@ RSpec.describe Rake::Task do
 
     it 'reports unsupported runtimes without private key output or partial database changes' do
       account
-      allow(OpenSSL::PKey).to receive(:generate_key).with('ML-DSA-44').and_raise(OpenSSL::PKey::PKeyError, 'unsupported')
+      allow(OpenSSL::PKey).to receive(:generate_key).with('ML-DSA-87').and_raise(OpenSSL::PKey::PKeyError, 'unsupported')
 
       expect do
         expect { task.invoke('alice') }.to raise_error(SystemExit)

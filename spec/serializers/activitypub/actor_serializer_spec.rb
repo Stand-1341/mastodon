@@ -9,7 +9,7 @@ RSpec.describe ActivityPub::ActorSerializer do
 
   describe 'public keys' do
     let(:record) { Fabricate(:account) }
-    let(:public_key) { synthetic_ml_dsa_44_public_key }
+    let(:public_key) { synthetic_ml_dsa_87_public_key }
 
     it 'preserves RSA-only publication without adding a CID context or generating keys' do
       rsa_key = record.keypair(type: :rsa)
@@ -24,12 +24,12 @@ RSpec.describe ActivityPub::ActorSerializer do
       expect(json['@context']).to_not include('https://www.w3.org/ns/cid/v1')
     end
 
-    context 'with usable ML-DSA-44 keys' do
-      let!(:pqc_key) { Fabricate(:keypair, account: record, type: :'ml-dsa-44', public_key: public_key) }
+    context 'with usable ML-DSA-87 keys' do
+      let!(:pqc_key) { Fabricate(:keypair, account: record, type: :'ml-dsa-87', public_key: public_key) }
 
       it 'publishes embedded Multikey entries alongside the unchanged RSA key' do
         rsa_key = record.keypair(type: :rsa)
-        second_key = Fabricate(:keypair, account: record, type: :'ml-dsa-44', public_key: public_key, expires_at: 1.day.from_now)
+        second_key = Fabricate(:keypair, account: record, type: :'ml-dsa-87', public_key: public_key, expires_at: 1.day.from_now)
 
         expect(json['publicKey']['publicKeyPem']).to eq(rsa_key.public_key)
         expect(json['assertionMethod']).to eq([pqc_key, second_key].map do |key|
@@ -69,7 +69,7 @@ RSpec.describe ActivityPub::ActorSerializer do
       end
 
       context 'with real native key material' do
-        let(:native_key) { generate_real_ml_dsa_44_key }
+        let(:native_key) { generate_real_ml_dsa_87_key }
         let(:public_key) { native_key.public_to_pem }
 
         it 'publishes a public key that round-trips to native DER' do
@@ -82,8 +82,8 @@ RSpec.describe ActivityPub::ActorSerializer do
     end
 
     it 'omits revoked, expired, and other key types' do
-      Fabricate(:keypair, account: record, type: :'ml-dsa-44', public_key: public_key, revoked: true)
-      Fabricate(:keypair, account: record, type: :'ml-dsa-44', public_key: public_key, expires_at: 1.minute.ago)
+      Fabricate(:keypair, account: record, type: :'ml-dsa-87', public_key: public_key, revoked: true)
+      Fabricate(:keypair, account: record, type: :'ml-dsa-87', public_key: public_key, expires_at: 1.minute.ago)
       Fabricate(:keypair, account: record, type: :ed25519)
 
       expect(json).to_not have_key('assertionMethod')

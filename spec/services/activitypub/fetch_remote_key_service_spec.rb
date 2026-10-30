@@ -118,14 +118,14 @@ RSpec.describe ActivityPub::FetchRemoteKeyService do
     end
   end
 
-  context 'with published ML-DSA-44 Multikeys' do
-    let(:public_key_id) { 'https://example.com/alice#ml-dsa-44-0123456789abcdef' }
-    let(:ml_dsa_public_key) { synthetic_ml_dsa_44_public_key }
+  context 'with published ML-DSA-87 Multikeys' do
+    let(:public_key_id) { 'https://example.com/alice#ml-dsa-87-0123456789abcdef' }
+    let(:ml_dsa_public_key) { synthetic_ml_dsa_87_public_key }
     let(:published_key) do
       key = Keypair.new(
         account: Account.new(username: 'alice', domain: 'example.com', uri: 'https://example.com/alice'),
         uri: public_key_id,
-        type: :'ml-dsa-44',
+        type: :'ml-dsa-87',
         public_key: ml_dsa_public_key
       )
       serialized_record_json(key, ActivityPub::MultikeySerializer, adapter: ActivityPub::Adapter)
@@ -145,15 +145,15 @@ RSpec.describe ActivityPub::FetchRemoteKeyService do
       stub_request(:get, public_key_id).to_return(body: actor.to_json, headers: { 'Content-Type': 'application/activity+json' })
     end
 
-    it 'fetches the actor fragment and stores the embedded public ML-DSA-44 key' do
+    it 'fetches the actor fragment and stores the embedded public ML-DSA-87 key' do
       key = subject.call(public_key_id, suppress_errors: false)
 
-      expect(key).to have_attributes(uri: public_key_id, type: 'ml-dsa-44', public_key: ml_dsa_public_key, private_key: nil)
+      expect(key).to have_attributes(uri: public_key_id, type: 'ml-dsa-87', public_key: ml_dsa_public_key, private_key: nil)
       expect(key.account.uri).to eq('https://example.com/alice')
     end
 
-    context 'with native ML-DSA-44 support' do
-      let(:native_key) { generate_real_ml_dsa_44_key }
+    context 'with native ML-DSA-87 support' do
+      let(:native_key) { generate_real_ml_dsa_87_key }
       let(:ml_dsa_public_key) { native_key.public_to_pem }
 
       it 'fetches the published public key without losing native key material' do
@@ -170,7 +170,7 @@ RSpec.describe ActivityPub::FetchRemoteKeyService do
       end
 
       it 'recognizes the CID context and confirms actor ownership through assertionMethod' do
-        expect(subject.call(public_key_id, suppress_errors: false)).to have_attributes(uri: public_key_id, type: 'ml-dsa-44', public_key: ml_dsa_public_key)
+        expect(subject.call(public_key_id, suppress_errors: false)).to have_attributes(uri: public_key_id, type: 'ml-dsa-87', public_key: ml_dsa_public_key)
       end
     end
   end

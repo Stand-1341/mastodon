@@ -14,15 +14,15 @@ RSpec.describe Multibase do
   end
 
   describe '.encode_key_from_pem' do
-    subject(:encoded_key) { described_class.encode_key_from_pem(public_key, type: :'ml-dsa-44') }
+    subject(:encoded_key) { described_class.encode_key_from_pem(public_key, type: :'ml-dsa-87') }
 
-    let(:public_key) { synthetic_ml_dsa_44_public_key }
+    let(:public_key) { synthetic_ml_dsa_87_public_key }
 
     it 'encodes the public bitstring with the ML-DSA multicodec and unpadded base64url multibase' do
       expect(encoded_key).to start_with('u')
       expect(encoded_key).to_not include('=', '+', '/')
-      expect(described_class.decode_multicodec(encoded_key)).to eq([:'mldsa-44-pub', "\x42" * 1312])
-      expect(described_class.decode_key_to_pem(encoded_key)).to eq([:'ml-dsa-44', public_key])
+      expect(described_class.decode_multicodec(encoded_key)).to eq([:'mldsa-87-pub', "\x42" * 2592])
+      expect(described_class.decode_key_to_pem(encoded_key)).to eq([:'ml-dsa-87', public_key])
     end
 
     it 'does not require the runtime to parse ML-DSA keys' do
@@ -32,15 +32,15 @@ RSpec.describe Multibase do
       expect(OpenSSL::PKey).to_not have_received(:read)
     end
 
-    it 'rejects another algorithm labelled as ML-DSA-44' do
+    it 'rejects another algorithm labelled as ML-DSA-87' do
       expect do
-        described_class.encode_key_from_pem(SigningKeysHelpers::PUBLIC_RSA_TEST_KEY, type: :'ml-dsa-44')
-      end.to raise_error(described_class::Error, /Invalid ML-DSA-44/)
+        described_class.encode_key_from_pem(SigningKeysHelpers::PUBLIC_RSA_TEST_KEY, type: :'ml-dsa-87')
+      end.to raise_error(described_class::Error, /Invalid ML-DSA-87/)
     end
 
     it 'rejects private key PEM rather than publishing it' do
       expect do
-        described_class.encode_key_from_pem(SigningKeysHelpers::PRIVATE_RSA_TEST_KEY, type: :'ml-dsa-44')
+        described_class.encode_key_from_pem(SigningKeysHelpers::PRIVATE_RSA_TEST_KEY, type: :'ml-dsa-87')
       end.to raise_error(described_class::Error, /Invalid public key PEM/)
     end
 
@@ -48,16 +48,22 @@ RSpec.describe Multibase do
       expect { described_class.encode_key_from_pem(public_key, type: :rsa) }.to raise_error(described_class::Error, /Unsupported key type/)
     end
 
+    it 'rejects retired ML-DSA-44 keys instead of publishing a second signature algorithm' do
+      expect do
+        described_class.encode_key_from_pem(public_key, type: :'ml-dsa-44')
+      end.to raise_error(described_class::Error, /Unsupported key type/)
+    end
+
     it 'rejects malformed DER' do
       pem = "-----BEGIN PUBLIC KEY-----\nYmFk\n-----END PUBLIC KEY-----\n"
 
-      expect { described_class.encode_key_from_pem(pem, type: :'ml-dsa-44') }.to raise_error(described_class::Error)
+      expect { described_class.encode_key_from_pem(pem, type: :'ml-dsa-87') }.to raise_error(described_class::Error)
     end
 
     it 'rejects a non-sequence DER structure' do
       pem = "-----BEGIN PUBLIC KEY-----\n#{Base64.strict_encode64(OpenSSL::ASN1::Integer.new(1).to_der)}\n-----END PUBLIC KEY-----\n"
 
-      expect { described_class.encode_key_from_pem(pem, type: :'ml-dsa-44') }.to raise_error(described_class::Error, /Invalid public key DER/)
+      expect { described_class.encode_key_from_pem(pem, type: :'ml-dsa-87') }.to raise_error(described_class::Error, /Invalid public key DER/)
     end
 
     it 'rejects an invalid public bitstring length' do
@@ -65,26 +71,26 @@ RSpec.describe Multibase do
       der.value.last.value = 'short'
       pem = "-----BEGIN PUBLIC KEY-----\n#{Base64.strict_encode64(der.to_der)}\n-----END PUBLIC KEY-----\n"
 
-      expect { described_class.encode_key_from_pem(pem, type: :'ml-dsa-44') }.to raise_error(described_class::Error, /Invalid ML-DSA-44/)
+      expect { described_class.encode_key_from_pem(pem, type: :'ml-dsa-87') }.to raise_error(described_class::Error, /Invalid ML-DSA-87/)
     end
 
-    context 'with a real ML-DSA-44 key' do
-      let(:key) { generate_real_ml_dsa_44_key }
+    context 'with a real ML-DSA-87 key' do
+      let(:key) { generate_real_ml_dsa_87_key }
       let(:public_key) { key.public_to_pem }
 
       it 'round-trips to the same native public key' do
         type, pem = described_class.decode_key_to_pem(encoded_key)
 
-        expect(type).to eq(:'ml-dsa-44')
+        expect(type).to eq(:'ml-dsa-87')
         expect(OpenSSL::PKey.read(pem).public_to_der).to eq(key.public_to_der)
-        expect(described_class.decode_multicodec(encoded_key).last.bytesize).to eq(1312)
+        expect(described_class.decode_multicodec(encoded_key).last.bytesize).to eq(2592)
       end
     end
   end
 
   describe '.decode_key_to_pem' do
-    it 'rejects a truncated ML-DSA-44 multicodec payload' do
-      binary = "#{described_class::MULTICODEC_PREFIXES[:'mldsa-44-pub']}short"
+    it 'rejects a truncated ML-DSA-87 multicodec payload' do
+      binary = "#{described_class::MULTICODEC_PREFIXES[:'mldsa-87-pub']}short"
       encoded_key = "u#{Base64.urlsafe_encode64(binary, padding: false)}"
 
       expect { described_class.decode_key_to_pem(encoded_key) }.to raise_error(described_class::Error, /Invalid data size/)

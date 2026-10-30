@@ -102,12 +102,12 @@ class ActivityPub::ProcessActivityService < BaseService
 
   def mldsa_proof_present?
     proof = @json['proof']
-    proof.is_a?(Hash) && proof['cryptosuite'] == 'mldsa44-jcs-2024'
+    proof.is_a?(Hash) && proof['cryptosuite'] == 'mldsa87-jcs-2024'
   end
 
   def verified_pqc_actor(original_json)
     proof = original_json['proof']
-    return unless proof.is_a?(Hash) && proof['cryptosuite'] == 'mldsa44-jcs-2024'
+    return unless proof.is_a?(Hash) && proof['cryptosuite'] == 'mldsa87-jcs-2024'
 
     proof_actor = actor_from_verified_object_integrity_proof(original_json)
     proof_actor if proof_actor.present? && proof_actor.uri == value_or_id(original_json['actor'])

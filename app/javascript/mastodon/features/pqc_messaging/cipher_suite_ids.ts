@@ -1,1 +1,0 @@
-export const DRAFT_PQC_MLS_CIPHERSUITE_ID = 0x0052;

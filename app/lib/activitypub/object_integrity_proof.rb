@@ -4,7 +4,7 @@
 class ActivityPub::ObjectIntegrityProof
   include JsonLdHelper
 
-  SUPPORTED_CRYPTOSUITES = %w(eddsa-jcs-2022 mldsa44-jcs-2024).freeze
+  SUPPORTED_CRYPTOSUITES = %w(eddsa-jcs-2022 mldsa87-jcs-2024).freeze
   CONTEXT = 'https://w3id.org/security/data-integrity/v2'
 
   def initialize(json)
@@ -47,18 +47,18 @@ class ActivityPub::ObjectIntegrityProof
       return if keypair.type != 'ed25519'
 
       keypair.actor if ActivityPub::ObjectIntegrityProof.verify_eddsa_jcs_2022(@json, keypair.keypair)
-    when 'mldsa44-jcs-2024'
-      return if keypair.type != 'ml-dsa-44'
+    when 'mldsa87-jcs-2024'
+      return if keypair.type != 'ml-dsa-87'
 
-      keypair.actor if ActivityPub::ObjectIntegrityProof.verify_mldsa44_jcs_2024(@json, keypair.keypair)
+      keypair.actor if ActivityPub::ObjectIntegrityProof.verify_mldsa_jcs_profile(@json, keypair.keypair)
     end
   rescue Multibase::Error, OpenSSL::PKey::PKeyError, ArgumentError, NotImplementedError
     false
   end
 
   def sign!(creator, sign_with: nil, expires_in: 2.days)
-    key = sign_with || creator.keypair(type: :'ml-dsa-44')
-    raise ArgumentError, 'A usable local ML-DSA-44 private key owned by the signer is required' unless creator.local? && key&.account == creator && key.type == 'ml-dsa-44' && key.usable? && key.private_key.present?
+    key = sign_with || creator.keypair(type: :'ml-dsa-87')
+    raise ArgumentError, 'A usable local ML-DSA-87 private key owned by the signer is required' unless creator.local? && key&.account == creator && key.type == 'ml-dsa-87' && key.usable? && key.private_key.present?
     raise ArgumentError, 'Refusing to replace an existing proof or signature' if @json.key?('proof') || @json.key?('signature')
 
     document = @json.deep_dup
@@ -69,7 +69,7 @@ class ActivityPub::ObjectIntegrityProof
 
     options = {
       'type' => 'DataIntegrityProof',
-      'cryptosuite' => 'mldsa44-jcs-2024',
+      'cryptosuite' => 'mldsa87-jcs-2024',
       'created' => Time.now.utc.iso8601,
       'expires' => expires_at.iso8601,
       'verificationMethod' => key.full_uri,
@@ -106,20 +106,16 @@ class ActivityPub::ObjectIntegrityProof
     keypair.verify(nil, proof_bytes, to_be_verified)
   end
 
-  # https://www.w3.org/TR/2026/WD-vc-di-quantum-resistant-1.0-20260616/#verify-proof-ml-dsa
-  def self.verify_mldsa44_jcs_2024(document, keypair) # rubocop:disable Naming/VariableNumber
+  # Local ML-DSA-87 profile uses JCS processing with its own identifier because
+  # the current W3C Quantum-Resistant Cryptosuites specification only specifies 44.
+  def self.verify_mldsa_jcs_profile(document, keypair)
     unsecured_document = document.without('proof')
     proof_options = document['proof'].without('proofValue')
     proof_bytes = Multibase.decode(document['proof']['proofValue'])
-
-    # This is inconsistent with eddsa-jcs-2022 but described in https://www.w3.org/TR/2026/WD-vc-di-quantum-resistant-1.0-20260616/#ProofConfigurationAlg
     proof_options['@context'] = unsecured_document['@context']
-
     transformed_data = unsecured_document.to_json_c14n
     proof_config = proof_options.to_json_c14n
-
     to_be_verified = Digest::SHA256.digest(proof_config) + Digest::SHA256.digest(transformed_data)
-
     keypair.verify(nil, proof_bytes, to_be_verified)
   end
 end

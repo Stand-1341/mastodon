@@ -16,7 +16,6 @@ import {
   encode,
 } from 'ts-mls';
 
-import { DRAFT_PQC_MLS_CIPHERSUITE_ID } from './cipher_suite_ids';
 import {
   addPqcGroupMember,
   createPqcApplicationMessage,
@@ -24,12 +23,16 @@ import {
   createPqcGroup,
   createPqcMlsContext,
   deserializePqcGroupState,
+  createPqcAttachmentEnvelope,
+  decodePqcAttachmentEnvelope,
   fingerprintPublicKey,
   generatePqcDeviceKeyPackage,
-  getPqcDeviceCiphersuiteId,
+  getPqcMlsCiphersuite,
   joinPqcGroup,
   processPqcApplicationMessage,
   processPqcMessage,
+  pqcDeviceAuthPublicKey,
+  PQC_MLS_CIPHERSUITE_ID,
   restorePqcGroupState,
   rotatePqcDeviceKeyPackage,
   removePqcGroupMembers,
@@ -40,52 +43,20 @@ import {
   signPqcDeviceRequest,
   sealVerifiedPqcRecoveryData,
   trustPqcDevice,
+  verifyPqcDeviceBinding,
 } from './mls_client';
 
 describe('PQC MLS client', () => {
-  it('selects and retains the draft hybrid suite through KeyPackage rotation and group state restore', async () => {
-    const alice = await generatePqcDeviceKeyPackage(
-      'https://example.test/users/alice',
-      'alice-device',
-      DRAFT_PQC_MLS_CIPHERSUITE_ID,
+  it('accepts only the unified ML-DSA-87 MLS suite', async () => {
+    await expect(getPqcMlsCiphersuite(0x0052)).rejects.toThrow(
+      'Unsupported MLS cipher suite 0x0052',
     );
-    const bob = await generatePqcDeviceKeyPackage(
-      'https://example.test/users/bob',
-      'bob-device',
-      DRAFT_PQC_MLS_CIPHERSUITE_ID,
-    );
-    const trust = new Map([
-      [alice.identity, alice.fingerprint],
-      [bob.identity, bob.fingerprint],
-    ]);
-    const context = await createPqcMlsContext(
-      trust,
-      DRAFT_PQC_MLS_CIPHERSUITE_ID,
-    );
-    const state = await createPqcGroup(
-      context,
-      'draft-suite-client-test',
-      alice,
-    );
-    const restoredState = deserializePqcGroupState(
-      serializePqcGroupState(state),
-    );
-    const rotated = await rotatePqcDeviceKeyPackage(bob);
-
-    expect(getPqcDeviceCiphersuiteId(alice)).toBe(DRAFT_PQC_MLS_CIPHERSUITE_ID);
-    expect(restoredState.groupContext.cipherSuite).toBe(
-      DRAFT_PQC_MLS_CIPHERSUITE_ID,
-    );
-    expect(getPqcDeviceCiphersuiteId(rotated)).toBe(
-      DRAFT_PQC_MLS_CIPHERSUITE_ID,
-    );
-
-    alice.privatePackage.fill(0);
-    bob.privatePackage.fill(0);
-    rotated.privatePackage.fill(0);
+    await expect(
+      getPqcMlsCiphersuite(PQC_MLS_CIPHERSUITE_ID),
+    ).resolves.toBeDefined();
   });
 
-  it('keeps HTTP device authentication keys independent from MLS identity keys', async () => {
+  it('uses the same ML-DSA-87 device identity for MLS and HTTP authentication', async () => {
     const device = await generatePqcDeviceKeyPackage(
       'https://example.test/users/alice',
       'alice-device',
@@ -115,17 +86,87 @@ describe('PQC MLS client', () => {
       body,
     );
 
-    expect(device.deviceAuthPublicKey).toHaveLength(2592);
-    expect(device.deviceAuthPrivateKey).toBeDefined();
-    expect(device.deviceAuthPublicKey).not.toEqual(mlsPublicKey);
+    expect(pqcDeviceAuthPublicKey(device)).toEqual(mlsPublicKey);
     expect(
       ml_dsa87.verify(
         signature,
         new TextEncoder().encode(signed),
-        device.deviceAuthPublicKey,
+        mlsPublicKey,
       ),
     ).toBe(true);
     expect(await fingerprintPublicKey(mlsPublicKey)).toBe(device.fingerprint);
+  });
+
+  it('verifies that an account ML-DSA-87 key certified a messaging device', async () => {
+    const actorUri = 'https://example.test/users/alice';
+    const deviceId = 'alice-device';
+    const keyPair = ml_dsa87.keygen();
+    const fingerprint = await fingerprintPublicKey(keyPair.publicKey);
+    const verificationMethod = `${actorUri}#ml-dsa-87-test`;
+    const issuedAt = 1792000000;
+    const ciphersuiteId = '0xf011';
+    const message = [
+      'Mastodon-PQC-Device-Binding-v1',
+      actorUri,
+      deviceId,
+      fingerprint,
+      ciphersuiteId,
+      verificationMethod,
+      issuedAt,
+    ].join('\n');
+    const signature = ml_dsa87.sign(
+      new TextEncoder().encode(message),
+      keyPair.secretKey,
+    );
+    const taggedPublicKey = new Uint8Array(2594);
+    taggedPublicKey.set([0x92, 0x24]);
+    taggedPublicKey.set(keyPair.publicKey, 2);
+    const multibase = `u${btoa(String.fromCharCode(...taggedPublicKey))
+      .replace(/=/g, '')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')}`;
+    const toBase64Url = (bytes: Uint8Array) =>
+      `u${btoa(String.fromCharCode(...bytes))
+        .replace(/=/g, '')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')}`;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            id: actorUri,
+            assertionMethod: [
+              {
+                id: verificationMethod,
+                type: 'Multikey',
+                controller: actorUri,
+                publicKeyMultibase: multibase,
+              },
+            ],
+          }),
+      }),
+    );
+
+    await expect(
+      verifyPqcDeviceBinding(
+        {
+          version: 1,
+          actor_uri: actorUri,
+          device_id: deviceId,
+          fingerprint,
+          ciphersuite_id: ciphersuiteId,
+          verification_method: verificationMethod,
+          issued_at: issuedAt,
+          signature: toBase64Url(signature),
+        },
+        actorUri,
+        deviceId,
+        fingerprint,
+      ),
+    ).resolves.toBe(true);
+    vi.unstubAllGlobals();
   });
 
   it('supports a raw two-device exchange in the selected library suite', async () => {
@@ -284,6 +325,73 @@ describe('PQC MLS client', () => {
     } finally {
       aliceTrust.clear();
       bobTrust.clear();
+      alice.publicPackage.fill(0);
+      alice.keyPackageMessage.fill(0);
+      bob.publicPackage.fill(0);
+      bob.keyPackageMessage.fill(0);
+    }
+  });
+
+  it('encrypts attachments inside the ML-DSA-87-authenticated MLS message and verifies their digest', async () => {
+    const alice = await generatePqcDeviceKeyPackage(
+      'https://example.test/users/alice',
+      'alice-attachment-device',
+    );
+    const bob = await generatePqcDeviceKeyPackage(
+      'https://example.test/users/bob',
+      'bob-attachment-device',
+    );
+    const trusted = new Map<string, string>([
+      [alice.identity, alice.fingerprint],
+      [bob.identity, bob.fingerprint],
+    ]);
+
+    try {
+      const context = await createPqcMlsContext(trusted);
+      const aliceState = await createPqcGroup(
+        context,
+        'attachment-authentication-test',
+        alice,
+      );
+      const addition = await addPqcGroupMember(
+        context,
+        aliceState,
+        bob.keyPackageMessage,
+      );
+      const bobState = await joinPqcGroup(context, addition.welcome, bob);
+      const file = new File([new Uint8Array([1, 3, 3, 7])], 'proof.bin', {
+        type: 'application/octet-stream',
+      });
+      const fileBytes = new Uint8Array([1, 3, 3, 7]);
+      Object.defineProperty(file, 'arrayBuffer', {
+        value: () => Promise.resolve(fileBytes.slice().buffer),
+      });
+      const envelope = await createPqcAttachmentEnvelope(file);
+      const sent = await createPqcApplicationMessage(
+        context,
+        addition.state,
+        JSON.stringify({ ...envelope, caption: 'signed attachment' }),
+      );
+      const received = await processPqcApplicationMessage(
+        context,
+        bobState,
+        sent.ciphertext,
+      );
+      const decoded = await decodePqcAttachmentEnvelope(received.plaintext);
+
+      expect(decoded?.envelope.caption).toBe('signed attachment');
+      expect(decoded?.envelope.sha256).toBe(envelope.sha256);
+      expect(Array.from(decoded?.bytes ?? [])).toEqual([1, 3, 3, 7]);
+
+      const tampered = JSON.parse(received.plaintext) as {
+        data: string;
+      };
+      tampered.data = 'AQIDBA==';
+      await expect(
+        decodePqcAttachmentEnvelope(JSON.stringify(tampered)),
+      ).resolves.toBeNull();
+    } finally {
+      trusted.clear();
       alice.publicPackage.fill(0);
       alice.keyPackageMessage.fill(0);
       bob.publicPackage.fill(0);

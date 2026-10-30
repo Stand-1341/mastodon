@@ -20,7 +20,7 @@ RSpec.describe 'ML-DSA ActivityPub federation' do
   end
 
   before do
-    generate_real_ml_dsa_44_key
+    generate_real_ml_dsa_87_key
     on_instance('sender.example') do
       ActivityPub::GeneratePqcKeyService.new.call(origin)
       publish_actor(origin)
@@ -212,7 +212,7 @@ RSpec.describe 'ML-DSA ActivityPub federation' do
     job = ActivityPub::DeliveryWorker.jobs.reverse.find { |delivery| delivery['args'][2] == receiver_inbox }
     expect(job).to be_present
     secured = JSON.parse(job['args'].first)
-    expect(secured.dig('proof', 'cryptosuite')).to eq('mldsa44-jcs-2024')
+    expect(secured.dig('proof', 'cryptosuite')).to eq('mldsa87-jcs-2024')
     expect(secured.dig('signature', 'type')).to eq('RsaSignature2017')
     secured
   end
@@ -250,7 +250,7 @@ RSpec.describe 'ML-DSA ActivityPub federation' do
     expect(key.account).to eq(remote_actor)
     expect(key.private_key).to be_nil
     published = Array(actor_documents.fetch('sender.example').fetch('assertionMethod')).find { |entry| entry['id'] == key.uri }
-    expect(Multibase.decode_key_to_pem(published.fetch('publicKeyMultibase'))).to eq([:'ml-dsa-44', key.public_key])
+    expect(Multibase.decode_key_to_pem(published.fetch('publicKeyMultibase'))).to eq([:'ml-dsa-87', key.public_key])
     expect(ActivityPub::ObjectIntegrityProof.new(document.without('signature')).verify_actor!).to eq(remote_actor)
   end
 end

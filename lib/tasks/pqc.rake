@@ -19,7 +19,7 @@ namespace :pqc do
     abort e.message
   end
 
-  desc 'Provision an ML-DSA-44 key for one local account (idempotent; does not enable signing)'
+  desc 'Provision an ML-DSA-87 key for one local account (idempotent; does not enable signing)'
   task :generate_key, [:username] => :environment do |_task, args|
     username = args[:username].to_s.strip.delete_prefix('@')
     abort 'Usage: rake pqc:generate_key[username] (one local username required)' if username.blank?
@@ -28,15 +28,20 @@ namespace :pqc do
     account = Account.find_local(username)
     abort "Local account #{username.inspect} not found; remote accounts cannot be provisioned" if account.nil?
 
-    keypair = ActiveRecord::Base.logger.silence(Logger::FATAL) do
+    logger = ActiveRecord::Base.logger
+    previous_log_level = logger.level
+    logger.level = Logger::FATAL
+    keypair = begin
       ActivityPub::GeneratePqcKeyService.new.call(account)
+    ensure
+      logger.level = previous_log_level
     end
-    puts "ML-DSA-44 key available for @#{account.username}: #{keypair.full_uri}"
+    puts "ML-DSA-87 key available for @#{account.username}: #{keypair.full_uri}"
   rescue ActivityPub::GeneratePqcKeyService::UnsupportedRuntimeError => e
     abort e.message
   end
 
-  desc 'Verify that one local account can decrypt and use its stored ML-DSA-44 key'
+  desc 'Verify that one local account can decrypt and use its stored ML-DSA-87 key'
   task :verify_key, [:username] => :environment do |_task, args|
     username = args[:username].to_s.strip.delete_prefix('@')
     abort 'Usage: rake pqc:verify_key[username] (one local username required)' if username.blank?
@@ -45,19 +50,24 @@ namespace :pqc do
     account = Account.find_local(username)
     abort "Local account #{username.inspect} not found" if account.nil?
 
-    keypair, verified = ActiveRecord::Base.logger.silence(Logger::FATAL) do
-      keypair = account.keypairs.usable.find_by(type: :'ml-dsa-44')
-      abort "No usable ML-DSA-44 key found for @#{account.username}" if keypair.nil?
+    logger = ActiveRecord::Base.logger
+    previous_log_level = logger.level
+    logger.level = Logger::FATAL
+    keypair, verified = begin
+      keypair = account.keypairs.usable.find_by(type: :'ml-dsa-87')
+      abort "No usable ML-DSA-87 key found for @#{account.username}" if keypair.nil?
 
       challenge = OpenSSL::Random.random_bytes(32)
       signature = keypair.keypair.sign(nil, challenge)
       [keypair, OpenSSL::PKey.read(keypair.public_key).verify(nil, signature, challenge)]
+    ensure
+      logger.level = previous_log_level
     end
-    abort "ML-DSA-44 private/public key mismatch for @#{account.username}" unless verified
+    abort "ML-DSA-87 private/public key mismatch for @#{account.username}" unless verified
 
-    puts "ML-DSA-44 stored key round-trip verified for @#{account.username}: #{keypair.full_uri}"
+    puts "ML-DSA-87 stored key round-trip verified for @#{account.username}: #{keypair.full_uri}"
   rescue OpenSSL::PKey::PKeyError, NotImplementedError => e
-    abort "Unable to use the stored ML-DSA-44 key; check Active Record Encryption key custody and OpenSSL 3.5+ provider support: #{e.message}"
+    abort "Unable to use the stored ML-DSA-87 key; check Active Record Encryption key custody and OpenSSL 3.5+ provider support: #{e.message}"
   end
 
   desc 'Verify private-media data-key wrapping and unwrapping without storing or printing key material'
@@ -188,7 +198,7 @@ namespace :pqc do
     local_account_count = Account.local.count
     accounts_with_usable_ml_dsa_key = Account.local
       .joins(:keypairs)
-      .merge(Keypair.where(type: :'ml-dsa-44').usable)
+      .merge(Keypair.where(type: :'ml-dsa-87').usable)
       .distinct.count
 
     inventory = {

@@ -37,13 +37,14 @@ class Pqc::Messaging::DeviceRequestAuthenticator
     reject! unless device
 
     raw_key = device[:auth_public_key]
-    reject! unless raw_key.is_a?(String) && raw_key.bytesize == PUBLIC_KEY_BYTES
+    algorithm_oid = ML_DSA_87_OID if raw_key&.bytesize == PUBLIC_KEY_BYTES
+    reject! unless raw_key.is_a?(String) && algorithm_oid
 
     auth_fingerprint = Digest::SHA256.hexdigest(raw_key)
     reject! unless device.auth_fingerprint.present? && secure_compare(auth_fingerprint, device.auth_fingerprint)
 
     signature = strict_base64(encoded_signature)
-    public_key = import_public_key(raw_key)
+    public_key = import_public_key(raw_key, algorithm_oid)
     signed_bytes = "Mastodon-PQC-Device-Auth-v1\n#{@request.method.upcase}\n#{@request.fullpath}\n#{timestamp}\n#{nonce}\n#{Digest::SHA256.hexdigest(@request.raw_post)}"
     reject! unless public_key.verify(nil, signature, signed_bytes.encode(Encoding::UTF_8))
 
@@ -69,9 +70,9 @@ class Pqc::Messaging::DeviceRequestAuthenticator
     reject!
   end
 
-  def import_public_key(raw_key)
+  def import_public_key(raw_key, algorithm_oid)
     algorithm = OpenSSL::ASN1::Sequence.new([
-                                              OpenSSL::ASN1::ObjectId.new(ML_DSA_87_OID),
+                                              OpenSSL::ASN1::ObjectId.new(algorithm_oid),
                                             ])
     subject_public_key_info = OpenSSL::ASN1::Sequence.new([
                                                             algorithm,

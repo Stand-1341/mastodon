@@ -10,7 +10,7 @@ class ActivityPub::PqcSigning
   def sign!(creator, sign_with: nil)
     document = @json
     if ENV['PQC_ACTIVITYPUB_SIGNING'] == 'true' && creator.local?
-      key = creator.keypair(type: :'ml-dsa-44')
+      key = creator.keypair(type: :'ml-dsa-87')
       unless key&.usable? && key.private_key.present?
         Rails.logger.debug { "Skipping ML-DSA ActivityPub proof for #{creator.acct}: no usable signing key is provisioned" }
         key = nil
@@ -31,6 +31,6 @@ class ActivityPub::PqcSigning
     document = @json.merge('@context' => context)
     ActivityPub::ObjectIntegrityProof.new(document).sign!(creator, sign_with: key)
   rescue OpenSSL::PKey::PKeyError, NotImplementedError
-    raise SigningError, 'Cannot sign with the configured ML-DSA-44 key; check OpenSSL/provider support. Disable PQC_ACTIVITYPUB_SIGNING explicitly to resume RSA-only signing'
+    raise SigningError, 'Cannot sign with the configured ML-DSA-87 key; check OpenSSL/provider support. Disable PQC_ACTIVITYPUB_SIGNING explicitly to resume RSA-only signing'
   end
 end

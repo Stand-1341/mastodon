@@ -8,7 +8,7 @@ RSpec.describe Pqc::ActivityPubSigningBenchmark do
   let(:account) { Fabricate(:account, username: 'pqc_benchmark') }
 
   before do
-    generate_real_ml_dsa_44_key
+    generate_real_ml_dsa_87_key
     ActivityPub::GeneratePqcKeyService.new.call(account)
   end
 
@@ -19,10 +19,10 @@ RSpec.describe Pqc::ActivityPubSigningBenchmark do
       expect(report).to include(
         account: 'pqc_benchmark',
         iterations: 2,
-        ml_dsa_proof_bytes: 2420
+        ml_dsa_proof_bytes: 4627
       )
       expect(report[:rsa_only]).to include(:mean_ms, :median_ms, :p95_ms, :max_ms)
-      expect(report[:rsa_plus_ml_dsa44]).to include(:mean_ms, :median_ms, :p95_ms, :max_ms)
+      expect(report[:rsa_plus_ml_dsa87]).to include(:mean_ms, :median_ms, :p95_ms, :max_ms)
       expect(ENV.fetch('PQC_ACTIVITYPUB_SIGNING', nil)).to eq('false')
     end
   end

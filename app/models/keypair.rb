@@ -29,7 +29,8 @@ class Keypair < ApplicationRecord
   enum :type, {
     rsa: 0,
     ed25519: 1,
-    'ml-dsa-44': 2,
+    'legacy-pqc-signature': 2,
+    'ml-dsa-87': 3,
   }, validate: true
 
   validates :uri, presence: true, uniqueness: true, if: -> { account.remote? }
@@ -58,7 +59,7 @@ class Keypair < ApplicationRecord
       case type
       when 'rsa'
         OpenSSL::PKey::RSA.new(private_key || public_key)
-      when 'ed25519', 'ml-dsa-44'
+      when 'ed25519', 'ml-dsa-87'
         OpenSSL::PKey.read(private_key || public_key)
       end
     end

@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_10_14_200000) do
+ActiveRecord::Schema[8.1].define(version: 2026_10_28_130000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -1031,6 +1031,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_14_200000) do
 
   create_table "pqc_devices", force: :cascade do |t|
     t.bigint "account_id", null: false
+    t.bigint "account_binding_issued_at"
+    t.string "account_binding_key_uri"
+    t.binary "account_binding_signature"
     t.string "device_id", null: false
     t.string "fingerprint", null: false
     t.binary "key_package", null: false

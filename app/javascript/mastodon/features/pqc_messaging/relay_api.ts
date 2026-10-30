@@ -5,6 +5,8 @@ import {
   apiRequestPost,
 } from 'mastodon/api';
 
+import { verifyPqcKeyPackageBinding } from './mls_client';
+
 export interface PqcDeviceRequestSigner {
   deviceId: string;
   sign: (
@@ -20,6 +22,17 @@ export interface PqcDeviceRevocationResult {
   revocation_pending: true;
 }
 
+export interface PqcDeviceBindingCertificate {
+  version: number;
+  actor_uri: string;
+  device_id: string;
+  fingerprint: string;
+  ciphersuite_id: string;
+  verification_method: string;
+  issued_at: number;
+  signature: string;
+}
+
 let deviceRequestSigner: PqcDeviceRequestSigner | null = null;
 
 export const setPqcDeviceRequestSigner = (
@@ -32,6 +45,7 @@ export interface PqcDevice {
   id: number;
   device_id: string;
   fingerprint: string;
+  device_binding: PqcDeviceBindingCertificate | null;
   device_auth_ready: boolean;
   revocation_pending: boolean;
   created_at: string;
@@ -43,6 +57,7 @@ export interface PqcKeyPackage {
   actor_uri: string;
   device_id: string;
   fingerprint: string;
+  device_binding: PqcDeviceBindingCertificate | null;
   key_package: string;
 }
 
@@ -61,6 +76,7 @@ export interface PqcConversation {
     actor_uri: string;
     device_id: string;
     fingerprint: string;
+    device_binding: PqcDeviceBindingCertificate | null;
     revocation_pending: boolean;
   }[];
   joined_device_ids: string[];
@@ -137,18 +153,41 @@ export const publishPqcKeyPackage = async (
     device_auth_public_key: encodeBase64(deviceAuthPublicKey),
   });
 
-export const fetchPqcKeyPackages = (
+export const fetchPqcKeyPackages = async (
   conversationId: string,
   accountId: string,
   requestId: string,
   excludeDeviceId?: string,
-): Promise<PqcKeyPackage[]> =>
-  signedRequest('GET', 'v1/pqc_devices/key_packages', undefined, {
-    conversation_id: conversationId,
-    account_id: accountId,
-    request_id: requestId,
-    exclude_device_id: excludeDeviceId,
-  });
+): Promise<PqcKeyPackage[]> => {
+  const packages = await signedRequest<PqcKeyPackage[]>(
+    'GET',
+    'v1/pqc_devices/key_packages',
+    undefined,
+    {
+      conversation_id: conversationId,
+      account_id: accountId,
+      request_id: requestId,
+      exclude_device_id: excludeDeviceId,
+    },
+  );
+
+  for (const device of packages) {
+    if (
+      !(await verifyPqcKeyPackageBinding(
+        device.device_binding,
+        device.actor_uri,
+        device.device_id,
+        device.fingerprint,
+        decodeBase64(device.key_package),
+      ))
+    )
+      throw new Error(
+        `Device ${device.device_id} has no valid account ML-DSA-87 binding`,
+      );
+  }
+
+  return packages;
+};
 
 export const decodePqcKeyPackage = (encoded: string): Uint8Array =>
   decodeBase64(encoded);

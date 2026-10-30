@@ -252,6 +252,7 @@ class Api::V1::PqcConversationsController < Api::BaseController
           actor_uri: ActivityPub::TagManager.instance.uri_for(device.account),
           device_id: device.device_id,
           fingerprint: device.fingerprint,
+          device_binding: device.ensure_account_binding!,
           revocation_pending: device.revocation_pending_at.present?,
         }
       end,

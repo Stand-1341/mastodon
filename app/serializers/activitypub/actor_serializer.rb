@@ -143,7 +143,7 @@ class ActivityPub::ActorSerializer < ActivityPub::Serializer
   end
 
   def assertion_method
-    @assertion_method ||= object.keypairs.usable.where(type: :'ml-dsa-44').order(id: :asc).to_a
+    @assertion_method ||= object.keypairs.usable.where(type: :'ml-dsa-87').order(id: :asc).to_a
   end
 
   def pqc_keys?

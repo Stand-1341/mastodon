@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require 'digest'
+
 class Api::V1::PqcDevicesController < Api::BaseController
   include PqcDeviceRequestAuthenticationConcern
 
@@ -18,16 +20,29 @@ class Api::V1::PqcDevicesController < Api::BaseController
     key_package = Base64.strict_decode64(params.require(:key_package))
     raise ArgumentError, 'KeyPackage exceeds 512 KiB' if key_package.bytesize > 512.kilobytes
 
+    auth_public_key = decode_auth_public_key(params.require(:device_auth_public_key))
+    fingerprint = params.require(:fingerprint)
+    expected_fingerprint = Digest::SHA256.hexdigest(auth_public_key)
+    raise ArgumentError, 'Device fingerprint must match its ML-DSA-87 authentication key' unless secure_compare(fingerprint, expected_fingerprint)
+
+    device_id = params.require(:device_id)
+    binding = Pqc::Messaging::DeviceBindingCertificate.issue(account: current_account, device_id:, fingerprint:)
+
     device = current_account.pqc_devices.create!(
-      device_id: params.require(:device_id),
-      fingerprint: params.require(:fingerprint),
-      auth_public_key: decode_auth_public_key(params.require(:device_auth_public_key)),
-      key_package: key_package
+      device_id: device_id,
+      fingerprint: fingerprint,
+      auth_public_key: auth_public_key,
+      key_package: key_package,
+      account_binding_key_uri: binding[:key_uri],
+      account_binding_issued_at: binding[:issued_at],
+      account_binding_signature: binding[:signature]
     )
 
     render json: serialize_device(device), status: 201
   rescue ArgumentError => e
     render json: { error: e.message }, status: 422
+  rescue ActivityPub::GeneratePqcKeyService::UnsupportedRuntimeError, OpenSSL::PKey::PKeyError, NotImplementedError => e
+    render json: { error: "Unable to bind the device to the account ML-DSA-87 key: #{e.message}" }, status: 422
   rescue ActiveRecord::RecordInvalid => e
     render json: { error: e.record.errors.full_messages }, status: 422
   end
@@ -132,6 +147,12 @@ class Api::V1::PqcDevicesController < Api::BaseController
     key
   end
 
+  def secure_compare(left, right)
+    left.is_a?(String) && right.is_a?(String) &&
+      left.bytesize == right.bytesize &&
+      ActiveSupport::SecurityUtils.secure_compare(left, right)
+  end
+
   def require_pqc_messaging_enabled!
     head 404 unless ENV['PQC_E2EE_EXPERIMENTAL'] == 'true'
   end
@@ -141,7 +162,8 @@ class Api::V1::PqcDevicesController < Api::BaseController
       id: device.id,
       device_id: device.device_id,
       fingerprint: device.fingerprint,
-      device_auth_ready: device.auth_public_key.present?,
+      device_auth_ready: device.auth_public_key&.bytesize == Pqc::Messaging::DeviceRequestAuthenticator::PUBLIC_KEY_BYTES && device.auth_fingerprint == device.fingerprint,
+      device_binding: device.ensure_account_binding!,
       revocation_pending: device.revocation_pending_at.present?,
       created_at: device.created_at,
     }
@@ -154,6 +176,7 @@ class Api::V1::PqcDevicesController < Api::BaseController
       actor_uri: ActivityPub::TagManager.instance.uri_for(device.account),
       device_id: device.device_id,
       fingerprint: device.fingerprint,
+      device_binding: device.ensure_account_binding!,
       key_package: Base64.strict_encode64(device.key_package),
     }
   end

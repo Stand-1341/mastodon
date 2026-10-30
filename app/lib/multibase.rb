@@ -7,7 +7,7 @@ class Multibase
   MULTICODEC_PREFIXES = {
     'rsa-pub': 0x1205,
     'ed25519-pub': 0xED,
-    'mldsa-44-pub': 0x1210,
+    'mldsa-87-pub': 0x1212,
   }.transform_values do |code|
     bytes = []
 
@@ -21,7 +21,7 @@ class Multibase
   end.freeze
 
   ED25519_PUB_DER_HEADER = ['302a300506032b6570032100'].pack('H*').freeze
-  ML_DSA_44_PUB_DER_HEADER = ['30820532300b06096086480165030403110382052100'].pack('H*').freeze
+  ML_DSA_87_PUB_DER_HEADER = ['30820a32300b060960864801650304031303820a2100'].pack('H*').freeze
 
   class Error < StandardError; end
 
@@ -51,7 +51,7 @@ class Multibase
   end
 
   def self.encode_key_from_pem(pem, type:)
-    raise Error, 'Unsupported key type' unless type.to_s == 'ml-dsa-44'
+    raise Error, 'Unsupported key type' unless type.to_s == 'ml-dsa-87'
 
     match = pem.match(%r{\A-----BEGIN PUBLIC KEY-----\s+([A-Za-z0-9+/=\s]+)-----END PUBLIC KEY-----\s*\z})
     raise Error, 'Invalid public key PEM' if match.nil?
@@ -62,12 +62,12 @@ class Multibase
 
     algorithm, public_key = sequence.value
     unless algorithm.is_a?(OpenSSL::ASN1::Sequence) && algorithm.value.size == 1 &&
-           algorithm.value.first.is_a?(OpenSSL::ASN1::ObjectId) && algorithm.value.first.oid == '2.16.840.1.101.3.4.3.17' &&
-           public_key.is_a?(OpenSSL::ASN1::BitString) && public_key.unused_bits.zero? && public_key.value.bytesize == 1312
-      raise Error, 'Invalid ML-DSA-44 public key'
+           algorithm.value.first.is_a?(OpenSSL::ASN1::ObjectId) && algorithm.value.first.oid == '2.16.840.1.101.3.4.3.19' &&
+           public_key.is_a?(OpenSSL::ASN1::BitString) && public_key.unused_bits.zero? && public_key.value.bytesize == 2592
+      raise Error, 'Invalid ML-DSA-87 public key'
     end
 
-    "u#{Base64.urlsafe_encode64(MULTICODEC_PREFIXES[:'mldsa-44-pub'] + public_key.value, padding: false)}"
+    "u#{Base64.urlsafe_encode64(MULTICODEC_PREFIXES[:'mldsa-87-pub'] + public_key.value, padding: false)}"
   rescue OpenSSL::ASN1::ASN1Error, ArgumentError => e
     raise Error, e
   end
@@ -83,11 +83,11 @@ class Multibase
 
       der = ED25519_PUB_DER_HEADER + binary
       [:ed25519, "-----BEGIN PUBLIC KEY-----\n#{Base64.strict_encode64(der)}\n-----END PUBLIC KEY-----\n"]
-    when :'mldsa-44-pub'
-      raise Error, 'Invalid data size for mldsa-44-pub' unless binary.size == 1312
+    when :'mldsa-87-pub'
+      raise Error, 'Invalid data size for mldsa-87-pub' unless binary.size == 2592
 
-      der = ML_DSA_44_PUB_DER_HEADER + binary
-      [:'ml-dsa-44', "-----BEGIN PUBLIC KEY-----\n#{Base64.strict_encode64(der).scan(/.{,64}/).join("\n")}-----END PUBLIC KEY-----\n"]
+      der = ML_DSA_87_PUB_DER_HEADER + binary
+      [:'ml-dsa-87', "-----BEGIN PUBLIC KEY-----\n#{Base64.strict_encode64(der).scan(/.{,64}/).join("\n")}-----END PUBLIC KEY-----\n"]
     else
       raise Error, 'Unsupported key type'
     end

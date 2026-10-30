@@ -996,9 +996,9 @@ RSpec.describe Mastodon::CLI::Accounts do
         subject(:rotate_account) { cli.invoke(action, arguments, options) }
 
         before do
-          Fabricate(:keypair, account: account, type: :'ml-dsa-44', public_key: synthetic_ml_dsa_44_public_key)
-          Fabricate(:keypair, account: account, type: :'ml-dsa-44', public_key: synthetic_ml_dsa_44_public_key, revoked: true)
-          Fabricate(:keypair, account: account, type: :'ml-dsa-44', public_key: synthetic_ml_dsa_44_public_key, expires_at: 1.minute.ago)
+          Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key)
+          Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key, revoked: true)
+          Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key, expires_at: 1.minute.ago)
           Fabricate(:keypair, account: account, type: :ed25519)
         end
 

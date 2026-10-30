@@ -31,16 +31,16 @@ RSpec.describe Payloadable do
     end
 
     before do
-      generate_real_ml_dsa_44_key
+      generate_real_ml_dsa_87_key
       ActivityPub::GeneratePqcKeyService.new.call(account)
     end
 
     it 'adds a verifiable proof alongside the RSA signature to actual serializer output' do
       secured = payload
-      key = account.keypair(type: :'ml-dsa-44')
+      key = account.keypair(type: :'ml-dsa-87')
 
       expect(secured['signature']['type']).to eq('RsaSignature2017')
-      expect(ActivityPub::ObjectIntegrityProof.verify_mldsa44_jcs_2024(secured.without('signature'), OpenSSL::PKey.read(key.public_key))).to be true
+      expect(ActivityPub::ObjectIntegrityProof.verify_mldsa_jcs_profile(secured.without('signature'), OpenSSL::PKey.read(key.public_key))).to be true
     end
 
     it 'does not bypass authorized-fetch mode' do

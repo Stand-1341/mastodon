@@ -79,6 +79,12 @@ RSpec.describe Pqc::Messaging::DeviceRequestAuthenticator do
     expect { described_class.call(request:, account:, now:) }.to raise_error(described_class::AuthenticationError)
   end
 
+  it 'rejects authentication keys from retired ML-DSA-44 devices' do
+    device.update!(auth_public_key: "\x00" * 1312)
+
+    expect { described_class.call(request:, account:, now:) }.to raise_error(described_class::AuthenticationError)
+  end
+
   it 'rejects an authentication key whose fingerprint does not match' do
     device.update!(auth_fingerprint: '0' * 64)
 

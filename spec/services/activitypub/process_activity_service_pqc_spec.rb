@@ -25,10 +25,10 @@ RSpec.describe ActivityPub::ProcessActivityService do
   end
 
   before do
-    generate_real_ml_dsa_44_key
+    generate_real_ml_dsa_87_key
     rsa_key = signer.keypair(type: :rsa)
     Fabricate(:keypair, account: actor, type: :rsa, uri: rsa_key.full_uri, public_key: rsa_key.public_key)
-    Fabricate(:keypair, account: actor, type: :'ml-dsa-44', uri: pqc_key.full_uri, public_key: pqc_key.public_key)
+    Fabricate(:keypair, account: actor, type: :'ml-dsa-87', uri: pqc_key.full_uri, public_key: pqc_key.public_key)
     allow(ActivityPub::Activity).to receive(:factory).and_return(nil)
   end
 

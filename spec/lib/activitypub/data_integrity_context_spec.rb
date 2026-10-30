@@ -13,7 +13,7 @@ RSpec.describe 'Data Integrity v2 context' do # rubocop:disable RSpec/DescribeCl
       'type' => 'DataIntegrityProof',
       'created' => '2026-10-13T12:00:00Z',
       'expires' => '2026-10-14T12:00:00Z',
-      'cryptosuite' => 'mldsa44-jcs-2024',
+      'cryptosuite' => 'mldsa87-jcs-2024',
       'verificationMethod' => 'https://example.com/actor#multikey',
       'proofPurpose' => 'assertionMethod',
       'proofValue' => 'z1234',

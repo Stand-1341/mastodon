@@ -25,23 +25,16 @@ import {
   wireformats,
   zeroOutUint8Array,
 } from 'ts-mls';
-import type {
-  ClientState,
-  Credential,
-  CiphersuiteImpl,
-  MlsContext,
-} from 'ts-mls';
+import type { ClientState, Credential, MlsContext } from 'ts-mls';
 
-import { DRAFT_PQC_MLS_CIPHERSUITE_ID } from './cipher_suite_ids';
+import type { PqcDeviceBindingCertificate } from './relay_api';
 
 export const PQC_MLS_CIPHERSUITE = 'MLS_256_XWING_AES256GCM_SHA512_MLDSA87';
-export const LEGACY_PQC_MLS_CIPHERSUITE_ID = 0xf011;
+export const PQC_MLS_CIPHERSUITE_ID = 0xf011;
 
 export interface PqcDeviceKeyPackage {
   identity: string;
   fingerprint: string;
-  deviceAuthPublicKey: Uint8Array;
-  deviceAuthPrivateKey?: Uint8Array;
   publicPackage: Uint8Array;
   keyPackageMessage: Uint8Array;
   privatePackage: Uint8Array;
@@ -51,17 +44,10 @@ export type PqcMlsContext = MlsContext;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
-const legacyCiphersuite = getCiphersuiteImpl(PQC_MLS_CIPHERSUITE);
-let draftCiphersuite: Promise<CiphersuiteImpl> | undefined;
+const pqcCiphersuite = getCiphersuiteImpl(PQC_MLS_CIPHERSUITE);
 
 export const getPqcMlsCiphersuite = async (id: number) => {
-  if (id === LEGACY_PQC_MLS_CIPHERSUITE_ID) return legacyCiphersuite;
-  if (id === DRAFT_PQC_MLS_CIPHERSUITE_ID) {
-    draftCiphersuite ??= import('./draft_ciphersuite').then(
-      ({ createDraftPqcMlsCiphersuite }) => createDraftPqcMlsCiphersuite(),
-    );
-    return draftCiphersuite;
-  }
+  if (id === PQC_MLS_CIPHERSUITE_ID) return pqcCiphersuite;
 
   throw new Error(
     `Unsupported MLS cipher suite 0x${id.toString(16).padStart(4, '0')}`,
@@ -75,7 +61,7 @@ export const getPqcDeviceCiphersuiteId = (
 
 export const createPqcMlsContext = async (
   trustedDevices: ReadonlyMap<string, string>,
-  cipherSuiteId = LEGACY_PQC_MLS_CIPHERSUITE_ID,
+  cipherSuiteId = PQC_MLS_CIPHERSUITE_ID,
 ): Promise<PqcMlsContext> => ({
   cipherSuite: await getPqcMlsCiphersuite(cipherSuiteId),
   authService: {
@@ -95,14 +81,11 @@ export const createPqcMlsContext = async (
 export const generatePqcDeviceKeyPackage = async (
   actorUri: string,
   deviceId: string,
-  cipherSuiteId = LEGACY_PQC_MLS_CIPHERSUITE_ID,
+  cipherSuiteId = PQC_MLS_CIPHERSUITE_ID,
 ): Promise<PqcDeviceKeyPackage> => {
   const impl = await getPqcMlsCiphersuite(cipherSuiteId);
   const signatureKeyPair = await generateSignatureKeyPair(impl);
-  const deviceAuthKeyPair = ml_dsa87.keygen();
-  const deviceAuthPublicKey = Uint8Array.from(deviceAuthKeyPair.publicKey);
-  const deviceAuthPrivateKey = Uint8Array.from(deviceAuthKeyPair.secretKey);
-  zeroOutUint8Array(deviceAuthKeyPair.secretKey);
+  // MLS membership and device API requests use this one ML-DSA identity.
   const fingerprint = await fingerprintPublicKey(signatureKeyPair.publicKey);
   const identity = `${actorUri}\n${deviceId}\n${fingerprint}`;
   const credential: Credential = {
@@ -121,8 +104,6 @@ export const generatePqcDeviceKeyPackage = async (
   return {
     identity,
     fingerprint,
-    deviceAuthPublicKey,
-    deviceAuthPrivateKey,
     publicPackage: encodedPublicPackage,
     keyPackageMessage: encode(mlsMessageEncoder, {
       wireformat: wireformats.mls_key_package,
@@ -181,10 +162,6 @@ export const rotatePqcDeviceKeyPackage = async (
     return {
       identity: keyPackage.identity,
       fingerprint: keyPackage.fingerprint,
-      deviceAuthPublicKey: Uint8Array.from(keyPackage.deviceAuthPublicKey),
-      deviceAuthPrivateKey: keyPackage.deviceAuthPrivateKey
-        ? Uint8Array.from(keyPackage.deviceAuthPrivateKey)
-        : undefined,
       publicPackage: encodedPublicPackage,
       keyPackageMessage: encode(mlsMessageEncoder, {
         wireformat: wireformats.mls_key_package,
@@ -217,13 +194,7 @@ export const signPqcDeviceRequest = async (
   ).join('');
   const message = `Mastodon-PQC-Device-Auth-v1\n${method.toUpperCase()}\n${path}\n${timestamp}\n${nonce}\n${bodyDigestHex}`;
 
-  if (keyPackage.deviceAuthPrivateKey)
-    return ml_dsa87.sign(
-      encoder.encode(message),
-      keyPackage.deviceAuthPrivateKey,
-    );
-
-  // Legacy recovery records used the MLS signature key for request authentication.
+  // The API request signature uses the same private key as the MLS credential.
   const privatePackage = decodeRequired(
     privateKeyPackageDecoder,
     keyPackage.privatePackage,
@@ -437,6 +408,107 @@ export const createPqcApplicationMessage = async (
     state: result.newState,
     ciphertext: encode(mlsMessageEncoder, result.message),
   };
+};
+
+export interface PqcAttachmentEnvelope {
+  version: 1;
+  type: 'attachment';
+  name: string;
+  mediaType: string;
+  byteLength: number;
+  sha256: string;
+  data: string;
+  caption?: string;
+}
+
+// The envelope is serialized inside an MLS application message. MLS therefore
+// encrypts it for the group and authenticates the sender's exact attachment
+// bytes through the suite's member signature.
+export const createPqcAttachmentEnvelope = async (
+  file: File,
+): Promise<PqcAttachmentEnvelope> => {
+  if (!file.size) throw new Error('Attachments cannot be empty');
+  // The relay currently caps encoded MLS messages at 1 MiB. Leave room for
+  // envelope metadata, base64 expansion, and MLS framing.
+  if (file.size > 512 * 1024)
+    throw new Error('Attachments must be 512 KiB or smaller');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const chunks: string[] = [];
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    chunks.push(
+      String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)),
+    );
+  }
+
+  return {
+    version: 1,
+    type: 'attachment',
+    name: file.name,
+    mediaType: file.type || 'application/octet-stream',
+    byteLength: bytes.length,
+    sha256: Array.from(new Uint8Array(digest), (byte) =>
+      byte.toString(16).padStart(2, '0'),
+    ).join(''),
+    data: btoa(chunks.join('')),
+  };
+};
+
+export const decodePqcAttachmentEnvelope = async (
+  value: string,
+): Promise<{ envelope: PqcAttachmentEnvelope; bytes: Uint8Array } | null> => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    !('version' in parsed) ||
+    parsed.version !== 1 ||
+    !('type' in parsed) ||
+    parsed.type !== 'attachment' ||
+    !('name' in parsed) ||
+    typeof parsed.name !== 'string' ||
+    parsed.name.length === 0 ||
+    parsed.name.length > 255 ||
+    !('mediaType' in parsed) ||
+    typeof parsed.mediaType !== 'string' ||
+    parsed.mediaType.length > 255 ||
+    !('byteLength' in parsed) ||
+    typeof parsed.byteLength !== 'number' ||
+    !Number.isSafeInteger(parsed.byteLength) ||
+    parsed.byteLength <= 0 ||
+    parsed.byteLength > 512 * 1024 ||
+    !('sha256' in parsed) ||
+    typeof parsed.sha256 !== 'string' ||
+    !/^[0-9a-f]{64}$/.test(parsed.sha256) ||
+    !('data' in parsed) ||
+    typeof parsed.data !== 'string' ||
+    ('caption' in parsed &&
+      (typeof parsed.caption !== 'string' || parsed.caption.length > 10_000))
+  )
+    return null;
+
+  try {
+    const binary = atob(parsed.data);
+    const bytes = Uint8Array.from(binary, (character) =>
+      character.charCodeAt(0),
+    );
+    if (bytes.length !== parsed.byteLength) return null;
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    const sha256 = Array.from(new Uint8Array(digest), (byte) =>
+      byte.toString(16).padStart(2, '0'),
+    ).join('');
+    if (sha256 !== parsed.sha256) return null;
+
+    return { envelope: parsed as PqcAttachmentEnvelope, bytes };
+  } catch {
+    return null;
+  }
 };
 
 export const processPqcApplicationMessage = async (
@@ -666,6 +738,130 @@ export const fingerprintPublicKey = async (
   return Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, '0'),
   ).join('');
+};
+
+export const verifyPqcDeviceBinding = async (
+  certificate: PqcDeviceBindingCertificate | null | undefined,
+  actorUri: string,
+  deviceId: string,
+  fingerprint: string,
+): Promise<boolean> => {
+  if (
+    certificate?.version !== 1 ||
+    certificate.actor_uri !== actorUri ||
+    certificate.device_id !== deviceId ||
+    certificate.fingerprint !== fingerprint ||
+    certificate.ciphersuite_id !== `0x${PQC_MLS_CIPHERSUITE_ID.toString(16)}` ||
+    !Number.isSafeInteger(certificate.issued_at) ||
+    certificate.issued_at <= 0 ||
+    !certificate.verification_method.startsWith(`${actorUri}#`) ||
+    !certificate.signature.startsWith('u')
+  ) {
+    return false;
+  }
+
+  try {
+    const response = await fetch(actorUri, {
+      headers: { Accept: 'application/activity+json' },
+    });
+    if (!response.ok) return false;
+    const actor = (await response.json()) as {
+      id?: string;
+      assertionMethod?: unknown;
+    };
+    if (actor.id !== actorUri) return false;
+
+    const methods: unknown[] = Array.isArray(actor.assertionMethod)
+      ? actor.assertionMethod
+      : actor.assertionMethod
+        ? [actor.assertionMethod]
+        : [];
+    const method = methods.find(
+      (
+        entry,
+      ): entry is {
+        publicKeyMultibase: string;
+      } => {
+        if (!entry || typeof entry !== 'object') return false;
+
+        const candidate = entry as Record<string, unknown>;
+        return (
+          candidate.id === certificate.verification_method &&
+          candidate.type === 'Multikey' &&
+          candidate.controller === actorUri &&
+          typeof candidate.publicKeyMultibase === 'string'
+        );
+      },
+    );
+    if (!method) return false;
+
+    const publicKey = decodeMldsa87Multibase(method.publicKeyMultibase);
+    const signature = decodeBase64Url(certificate.signature.slice(1));
+    const message = [
+      'Mastodon-PQC-Device-Binding-v1',
+      actorUri,
+      deviceId,
+      fingerprint,
+      certificate.ciphersuite_id,
+      certificate.verification_method,
+      certificate.issued_at,
+    ].join('\n');
+
+    return ml_dsa87.verify(signature, encoder.encode(message), publicKey);
+  } catch {
+    return false;
+  }
+};
+
+export const verifyPqcKeyPackageBinding = async (
+  certificate: PqcDeviceBindingCertificate | null | undefined,
+  actorUri: string,
+  deviceId: string,
+  fingerprint: string,
+  encodedKeyPackageMessage: Uint8Array,
+): Promise<boolean> => {
+  try {
+    const message = decodeRequired(mlsMessageDecoder, encodedKeyPackageMessage);
+    if (
+      message.wireformat !== wireformats.mls_key_package ||
+      !('keyPackage' in message)
+    )
+      return false;
+
+    const keyPackage = message.keyPackage;
+    if (keyPackage.cipherSuite !== PQC_MLS_CIPHERSUITE_ID) return false;
+    if (
+      credentialIdentity(keyPackage.leafNode.credential) !==
+        `${actorUri}\n${deviceId}\n${fingerprint}` ||
+      (await fingerprintPublicKey(keyPackage.leafNode.signaturePublicKey)) !==
+        fingerprint
+    )
+      return false;
+
+    return await verifyPqcDeviceBinding(
+      certificate,
+      actorUri,
+      deviceId,
+      fingerprint,
+    );
+  } catch {
+    return false;
+  }
+};
+
+const decodeMldsa87Multibase = (encoded: string): Uint8Array => {
+  if (!encoded.startsWith('u'))
+    throw new Error('Unsupported Multibase encoding');
+  const bytes = decodeBase64Url(encoded.slice(1));
+  if (bytes.length !== 2594 || bytes[0] !== 0x92 || bytes[1] !== 0x24)
+    throw new Error('Invalid ML-DSA-87 Multikey');
+  return bytes.slice(2);
+};
+
+const decodeBase64Url = (encoded: string): Uint8Array => {
+  const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+  const binary = atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, '='));
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 };
 
 const validateCredential = async (

@@ -254,9 +254,9 @@ RSpec.describe Account do
       expect(account.keypair.keypair).to be_instance_of OpenSSL::PKey::RSA
     end
 
-    context 'with a local legacy RSA account and an ML-DSA-44 row' do
+    context 'with a local legacy RSA account and an ML-DSA-87 row' do
       let(:account) { Fabricate(:account, legacy_keypair: true) }
-      let!(:pqc_key) { Fabricate(:keypair, account: account, type: :'ml-dsa-44', public_key: synthetic_ml_dsa_44_public_key) }
+      let!(:pqc_key) { Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key) }
 
       it 'defaults to the legacy RSA key instead of the stored ML-DSA key' do
         key = account.keypair
@@ -268,7 +268,7 @@ RSpec.describe Account do
       end
 
       it 'retains explicit ML-DSA key selection' do
-        expect(account.keypair(type: :'ml-dsa-44')).to eq(pqc_key)
+        expect(account.keypair(type: :'ml-dsa-87')).to eq(pqc_key)
       end
 
       it 'continues producing signatures verifiable with the legacy RSA public key' do
@@ -286,7 +286,7 @@ RSpec.describe Account do
 
           expect(account.keypair).to eq(rsa_key)
           expect(account.keypair(type: :rsa)).to eq(rsa_key)
-          expect(account.keypair(type: :'ml-dsa-44')).to eq(pqc_key)
+          expect(account.keypair(type: :'ml-dsa-87')).to eq(pqc_key)
         end
 
         it 'falls back to legacy RSA when the stored RSA key is revoked' do
@@ -315,13 +315,13 @@ RSpec.describe Account do
     context 'with a remote account and mixed key types' do
       let(:account) { Fabricate(:remote_account, legacy_keypair: true) }
       let!(:ed25519_key) { Fabricate(:keypair, account: account, type: :ed25519) }
-      let!(:pqc_key) { Fabricate(:keypair, account: account, type: :'ml-dsa-44', public_key: synthetic_ml_dsa_44_public_key) }
+      let!(:pqc_key) { Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key) }
       let!(:rsa_key) { Fabricate(:keypair, account: account, type: :rsa) }
 
       it 'preserves default selection of the oldest usable remote key regardless of type' do
         expect(account.keypair).to eq(ed25519_key)
         expect(account.keypair(type: :rsa)).to eq(rsa_key)
-        expect(account.keypair(type: :'ml-dsa-44')).to eq(pqc_key)
+        expect(account.keypair(type: :'ml-dsa-87')).to eq(pqc_key)
       end
 
       it 'preserves default ML-DSA selection when earlier remote keys are unusable' do

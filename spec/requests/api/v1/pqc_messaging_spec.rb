@@ -58,7 +58,24 @@ RSpec.describe 'PQC messaging relay API' do
     it 'registers and lists the public device identity' do
       expect(PqcDevice.exists?(id: device_id)).to be true
       get '/api/v1/pqc_devices', headers: headers
-      expect(response.parsed_body).to contain_exactly(include('device_id' => 'browser-device-1', 'fingerprint' => PqcDevice.find(device_id).fingerprint))
+      listed_device = response.parsed_body.fetch(0)
+      expect(listed_device).to include(
+        'device_id' => 'browser-device-1',
+        'fingerprint' => PqcDevice.find(device_id).fingerprint
+      )
+
+      binding = listed_device.fetch('device_binding')
+      key = user.account.keypairs.reload.find { |candidate| candidate.full_uri == binding.fetch('verification_method') }
+      message = Pqc::Messaging::DeviceBindingCertificate.signing_message(
+        actor_uri: binding.fetch('actor_uri'),
+        device_id: binding.fetch('device_id'),
+        fingerprint: binding.fetch('fingerprint'),
+        verification_method: binding.fetch('verification_method'),
+        issued_at: binding.fetch('issued_at')
+      )
+
+      expect(binding).to include('ciphersuite_id' => '0xf011', 'version' => 1)
+      expect(OpenSSL::PKey.read(key.public_key).verify(nil, Base64.urlsafe_decode64(binding.fetch('signature').delete_prefix('u')), message)).to be true
     end
 
     it 'makes a KeyPackage available once per authorized conversation member' do

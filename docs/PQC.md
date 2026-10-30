@@ -57,17 +57,20 @@ post-quantum-resistant.
 `true` enables it. Enabling it does not generate keys or replace account keys.
 Account creation
 and HTTP federation authentication remain RSA-compatible. Accounts without a
-usable ML-DSA-44 key continue signing with RSA only, so federation remains
+usable ML-DSA-87 key continue signing with RSA only, so federation remains
 available during staged per-account provisioning. The inventory reports how
 many local accounts still lack a usable key; do not describe their outbound
 activities as PQC-signed.
 
 For provisioned accounts, the normal object-signing path adds a
-`mldsa44-jcs-2024` Object Integrity Proof, then signs the entire resulting document
-with the existing `RsaSignature2017` implementation. RSA HTTP signatures and the
-legacy actor `publicKey` remain intact. Existing authorized-fetch signing rules
-are respected. The native OpenSSL implementation and the upstream JCS verifier
-are reused; no alternate cryptographic library or custom algorithm is introduced.
+`mldsa87-jcs-2024` Object Integrity Proof, then signs the entire resulting
+document with the existing `RsaSignature2017` implementation. RSA HTTP
+signatures and the legacy actor `publicKey` remain intact. Existing
+authorized-fetch signing rules are respected. The 87 proof profile uses the
+same JCS/SHA-256 processing as the existing 44 implementation, with a distinct
+identifier and ML-DSA-87 key. The current W3C Quantum-Resistant Cryptosuites
+specification lists only ML-DSA-44, so this 87 profile is experimental and
+requires peer support; it must not be advertised as W3C-standardized.
 
 This is **additive compatibility**, not a policy requiring every federation peer
 to verify a post-quantum signature. RSA-only authentication is still accepted,
@@ -80,7 +83,7 @@ those tests pass.
 ### Optional strict inbound policy for controlled peers
 
 `PQC_ACTIVITYPUB_REQUIRE_PROOF=true` rejects inbound ActivityPub activities
-unless their original document carries a valid `mldsa44-jcs-2024` Object Integrity Proof
+unless their original document carries a valid `mldsa87-jcs-2024` Object Integrity Proof
 whose authorized key belongs to the activity actor. It applies after HTTP
 signature authentication and also rejects otherwise valid RSA Linked Data
 Signatures without that proof. Leave it unset or `false` for ordinary mixed
@@ -94,7 +97,7 @@ is invalid. The default permits legacy activities that omit an ML-DSA proof.
 ### Provision one account explicitly
 
 Back up the database and existing Active Record Encryption secrets first. Run in
-an OpenSSL 3.5+ runtime whose provider supports ML-DSA-44 generation, export and
+an OpenSSL 3.5+ runtime whose provider supports ML-DSA-87 generation, export and
 signing:
 
 ```sh
@@ -108,12 +111,14 @@ docker compose exec -T app bin/rails 'pqc:generate_key[alice]'
 ```
 
 The operation locks that account and is idempotent: repeated calls reuse its
-oldest usable ML-DSA-44 key. It never changes RSA/legacy key material, provisions
-remote accounts, deletes older keys, or prints private keys. Private material is
-stored with the existing `Keypair` Active Record Encryption. RSA rotation now
-preserves keys of other algorithms. No bulk migration is run.
+oldest usable ML-DSA-87 key. It never changes RSA keys, provisions remote
+accounts, deletes older key records, or prints private keys. Old ML-DSA-44 rows
+remain archival database records only; the application no longer parses,
+publishes, selects, or verifies them, so they cannot be used for signing or an
+application rollback. Private material is stored with the existing `Keypair`
+Active Record Encryption. RSA rotation preserves keys of other types.
 
-The actor publishes usable ML-DSA public keys as embedded `Multikey` entries in
+The actor publishes usable ML-DSA-87 public keys as embedded `Multikey` entries in
 `assertionMethod`, alongside the unchanged RSA `publicKey`. Stable key fragments,
 controller URIs and optional expiration timestamps are persisted/published. Key
 publication remains available even when outbound signing is disabled so queued
@@ -187,8 +192,10 @@ either key or the signature. Record
 the backup identifier, restore date, application revision, and verification
 result without recording secret values. A database backup without the matching
 encryption secrets cannot restore usable private keys.
-This recovery path was exercised locally with a disposable source PostgreSQL
-database: a real ML-DSA-44 key was generated and encrypted, the database was
+An earlier recovery exercise used a disposable source PostgreSQL
+database and an ML-DSA-44 key. The current verifier checks ML-DSA-87 keys; a new
+recovery exercise is required after provisioning an 87 key. In the earlier run,
+the database was
 dumped and restored into a separate database, and `pqc:verify_key` successfully
 decrypted the restored key and verified a fresh signature. The test used the
 same configured Active Record Encryption secrets on both sides; it did not
@@ -204,9 +211,10 @@ signing, but excludes Rails boot and does not model server concurrency or full
 request latency. Repeat the measurement on the target deployment hardware; do
 not treat a development-container result as a production capacity estimate.
 
-On this local development container (Ruby 4.0.7, OpenSSL 3.5.7), a 20-iteration
-run on 2026-10-14 measured RSA-only median signing at 7.59 ms and
-RSA-plus-ML-DSA-44 median at 15.23 ms, a 7.64 ms median increment. The observed
+The historical 2026-10-14 baseline (Ruby 4.0.7, OpenSSL 3.5.7) measured
+RSA-only median signing at 7.59 ms and RSA-plus-ML-DSA-44 median at 15.23 ms,
+a 7.64 ms median increment. It predates the ML-DSA-87 cutover; run the benchmark
+again on the target deployment hardware for a current 87 measurement. The observed
 p95 values were 11.37 ms and 49.18 ms respectively, showing substantial run-to-
 run variance in this environment. This warm signing-path measurement does not
 explain browser startup or full page-load delays.
@@ -298,35 +306,39 @@ The selected `ts-mls` suite uses private-use ID `0xf011`; it is not an IANA
 assigned MLS cipher suite, so clients must use this exact private suite to
 interoperate. As of 2026-10-14, the active [MLS post-quantum cipher-suite
 draft](https://datatracker.ietf.org/doc/draft-ietf-mls-pq-ciphersuites/) has
-different proposed combinations: its X-Wing hybrid suite uses ML-DSA-44,
-ChaCha20-Poly1305, and SHA-384, while its ML-DSA-87 suite uses pure ML-KEM-1024,
-AES-256-GCM, and SHA-384. This prototype's X-Wing/AES-256-GCM/SHA-512/ML-DSA-87
-combination is not one of those draft suites. The deployment inventory reports
+different proposed combinations. This prototype's
+X-Wing/AES-256-GCM/SHA-512/ML-DSA-87 combination is not one of those draft
+suites. The deployment inventory reports
 the private-use ID and marks cross-client interoperability unavailable; do not
 claim compatibility with other MLS implementations until the suite is
 standardized and an independent client passes a wire-level test.
 
-A separate implementation in `draft_ciphersuite.ts` supports the draft's
-hybrid ML-KEM-768/X25519, ChaCha20-Poly1305, SHA-384, and ML-DSA-44 suite using
-provisional codepoint `0x0052`. Device registration now offers this suite as an
-explicit experimental option. Existing private-use-suite devices remain the
-default for compatibility. Group state records its suite, recovery restores
-that suite, device-key rotation preserves it, and the client rejects a member
-KeyPackage that uses a different suite. Every device in a group must therefore
-be registered with the same suite. An opt-in wire test exchanges a KeyPackage,
-Welcome, and encrypted application messages in both directions with OpenMLS
-0.9.1 and its RustCrypto provider. The reproducible procedure is in
-`spec/pqc_mls_interop/README.md`.
+ML-DSA-87 is the single signature algorithm used for new PQC identities in
+ActivityPub and MLS. Account and device keys remain separate: the server-held
+account key signs a domain-separated certificate for each device ID and
+ML-DSA-87 fingerprint, and the client checks that certificate against the
+account's published `assertionMethod` key before trusting the MLS device.
+Each device's own ML-DSA-87 key signs MLS membership and authenticated relay
+requests. X-Wing, AES-256-GCM, and SHA-512 remain in their separate key
+establishment, encryption, and hash roles; ML-DSA is the common signature
+algorithm, not a replacement for those primitives.
 
-That result establishes interoperability for this draft suite between these
-two implementations; it does not make the suite a registered or finalized MLS
-suite, or establish security review of either implementation. The `0xf011`
-suite remains available for existing devices and groups. New groups can use
-`0x0052` only when all participating devices have matching KeyPackages. No
-automatic migration of groups, devices, or recovery files occurs. Broader
-migration and multi-device testing remains necessary before changing the
-default, as does integration testing of the draft suite's ML-DSA-44 group
-signatures alongside the separate ML-DSA-87 device request-authentication keys.
+New device registration and the MLS context use the repository's single
+ML-DSA-87 signature suite at `0xf011`. The former `0x0052` ML-DSA-44 draft suite
+is retired. Old `0x0052` groups cannot be converted because the suite is bound
+into MLS group state; create new conversations and register new 87 devices.
+Existing 87 devices created before binding certificates were added receive one
+when listed if their registered API key matches the MLS signing key. The
+cutover migration revokes older device records that use a different key or
+algorithm; register a new device and create new groups for those accounts. The
+device's ML-DSA-87 signing key is also its API
+request-authentication key, so one
+per-device identity signs MLS messages, attachment envelopes, and authenticated
+relay operations. Group state records its suite, recovery restores that suite,
+device-key rotation preserves it, and the client rejects a member KeyPackage
+that uses a different suite. The `0xf011` suite remains private-use and
+cross-client interoperability is unavailable. All devices in a group must use
+matching KeyPackages. No automatic group-state conversion occurs.
 
 The prototype binds MLS basic credentials to explicitly confirmed SHA-256
 fingerprints and includes a passing local two-device round-trip test. Group-state
