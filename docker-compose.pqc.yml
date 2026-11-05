@@ -1,7 +1,7 @@
 # Opt-in PostgreSQL 18 hybrid TLS overlay for production Compose deployments.
-# Requires ./secrets/postgres-tls/{ca.crt,server.crt,server.key} and
-# ./secrets/postgres-superuser-password. server.crt must include DNS:db in its
-# subjectAltName and chain to ca.crt.
+# Generate the required material with `bin/pqc-tls-init`: it writes
+# ./secrets/postgres-tls/{ca.crt,server.crt,server.key} (server.crt carries
+# subjectAltName DNS:db and chains to ca.crt) and the superuser-password file.
 services:
   db:
     build:

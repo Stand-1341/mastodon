@@ -61,8 +61,10 @@ post-quantum-resistant.
 
 ### Security and compatibility boundary
 
-`PQC_ACTIVITYPUB_SIGNING` is **disabled by default**. Only the literal value
-`true` enables it. Enabling it does not generate keys or replace account keys.
+`PQC_ACTIVITYPUB_SIGNING` is **enabled by default**. Signing happens whenever an
+account has a usable ML-DSA-87 key, and only the literal value `false` turns it
+off — that switch exists for runtimes whose OpenSSL cannot handle ML-DSA-87, not
+as a feature gate. Signing does not generate keys or replace account keys.
 Account creation
 and HTTP federation authentication remain RSA-compatible. Existing accounts
 without a usable ML-DSA-87 key continue signing with RSA only, so federation
