@@ -7,7 +7,6 @@ class Api::V1::PqcDevicesController < Api::BaseController
 
   before_action -> { doorkeeper_authorize! :write, :'write:statuses' }
   before_action :require_user!
-  before_action :require_pqc_messaging_enabled!
   before_action :authenticate_pqc_device_request!, only: [:destroy, :update_key_package, :key_packages]
   before_action :require_authenticated_key_package_device!, only: [:update_key_package]
   before_action :require_authenticated_package_claim_device!, only: [:key_packages]
@@ -151,10 +150,6 @@ class Api::V1::PqcDevicesController < Api::BaseController
     left.is_a?(String) && right.is_a?(String) &&
       left.bytesize == right.bytesize &&
       ActiveSupport::SecurityUtils.secure_compare(left, right)
-  end
-
-  def require_pqc_messaging_enabled!
-    head 404 unless ENV['PQC_E2EE_EXPERIMENTAL'] == 'true'
   end
 
   def serialize_device(device)

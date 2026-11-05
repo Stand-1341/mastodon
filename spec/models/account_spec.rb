@@ -256,7 +256,10 @@ RSpec.describe Account do
 
     context 'with a local legacy RSA account and an ML-DSA-87 row' do
       let(:account) { Fabricate(:account, legacy_keypair: true) }
-      let!(:pqc_key) { Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key) }
+      let!(:pqc_key) do
+        account.keypairs.where(type: :'ml-dsa-87').delete_all
+        Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key)
+      end
 
       it 'defaults to the legacy RSA key instead of the stored ML-DSA key' do
         key = account.keypair
@@ -957,6 +960,156 @@ RSpec.describe Account do
           it { is_expected.to be true }
         end
       end
+    end
+  end
+
+  describe 'automatic PQC key provisioning' do
+    include PqcKeyProvisioningHelpers
+
+    let(:public_key) { synthetic_ml_dsa_87_public_key }
+    let(:private_key) { SigningKeysHelpers::PRIVATE_RSA_TEST_KEY }
+    let(:native_key) { instance_double(OpenSSL::PKey::PKey, private_to_pem: private_key, public_to_pem: public_key) }
+
+    context 'when the runtime can generate ML-DSA-87 keys' do
+      before do
+        allow(OpenSSL::PKey).to receive(:generate_key).with('ML-DSA-87').and_return(native_key)
+      end
+
+      it 'provisions a usable ML-DSA-87 keypair for a new local account' do
+        account = Fabricate(:account)
+
+        keypair = account.keypairs.find_by(type: :'ml-dsa-87')
+
+        expect(keypair).to be_present
+        expect(keypair).to be_usable
+        expect(keypair).to have_attributes(public_key: public_key, private_key: private_key)
+        expect(account.pqc_signed?).to be true
+      end
+
+      it 'does not provision a keypair for a new remote account' do
+        account = Fabricate(:remote_account)
+
+        expect(account.keypairs.where(type: :'ml-dsa-87')).to be_empty
+        expect(OpenSSL::PKey).to_not have_received(:generate_key)
+      end
+
+      it 'does not even call the provisioning service for a new remote account' do
+        allow(ActivityPub::GeneratePqcKeyService).to receive(:new).and_call_original
+
+        account = Fabricate(:remote_account)
+
+        expect(ActivityPub::GeneratePqcKeyService).to_not have_received(:new)
+        expect(account.keypairs.where(type: :'ml-dsa-87')).to be_empty
+      end
+
+      it 'does not duplicate the keypair when provisioning runs again' do
+        account = Fabricate(:account)
+        existing_key = account.keypairs.find_by!(type: :'ml-dsa-87')
+        existing_attributes = existing_key.attributes
+
+        expect { account.send(:provision_pqc_signing_key) }
+          .to_not change { account.keypairs.where(type: :'ml-dsa-87').count }
+
+        expect(existing_key.reload.attributes).to eq(existing_attributes)
+      end
+
+      it 'does not run when an existing local account is updated' do
+        account = Fabricate(:account)
+        account.keypairs.where(type: :'ml-dsa-87').delete_all
+        # Installed after creation so only update-time calls are recorded.
+        allow(ActivityPub::GeneratePqcKeyService).to receive(:new).and_call_original
+
+        account.update!(display_name: 'Renamed after creation')
+
+        expect(ActivityPub::GeneratePqcKeyService).to_not have_received(:new)
+        expect(account.keypairs.where(type: :'ml-dsa-87')).to be_empty
+      end
+    end
+
+    context 'when provisioning fails' do
+      let(:service) { instance_double(ActivityPub::GeneratePqcKeyService) }
+
+      before do
+        allow(ActivityPub::GeneratePqcKeyService).to receive(:new).and_return(service)
+        allow(service).to receive(:call).and_raise(ActivityPub::GeneratePqcKeyService::UnsupportedRuntimeError, 'OpenSSL 3.5 or later is required')
+        allow(Rails.logger).to receive(:warn)
+      end
+
+      it 'still creates the local account and logs a warning' do
+        account = Fabricate(:account)
+
+        expect(account).to be_persisted
+        expect(Account.exists?(account.id)).to be true
+        expect(account.keypairs.where(type: :'ml-dsa-87')).to be_empty
+        expect(Rails.logger).to have_received(:warn).with(/ML-DSA-87/)
+      end
+
+      it 'names the account in the warning so operators can find it' do
+        account = Fabricate(:account)
+
+        expect(Rails.logger).to have_received(:warn).with(a_string_including("@#{account.acct}"))
+      end
+    end
+  end
+
+  describe '#pqc_signed?' do
+    include PqcKeyProvisioningHelpers
+
+    subject { account.pqc_signed? }
+
+    let(:account) { Fabricate(:account) }
+
+    context 'when the account has no keypairs' do
+      before { account.keypairs.destroy_all }
+
+      it { is_expected.to be false }
+    end
+
+    context 'when the account only has an RSA keypair' do
+      before do
+        account.keypairs.destroy_all
+        Fabricate(:keypair, account: account, type: :rsa)
+      end
+
+      it { is_expected.to be false }
+    end
+
+    context 'when the account has a usable ML-DSA-87 keypair' do
+      before do
+        account.keypairs.destroy_all
+        Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key)
+      end
+
+      it { is_expected.to be true }
+    end
+
+    context 'when the ML-DSA-87 keypair is not usable' do
+      context 'when it has been revoked' do
+        before do
+          account.keypairs.destroy_all
+          Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key, revoked: true)
+        end
+
+        it { is_expected.to be false }
+      end
+
+      context 'when it has expired' do
+        before do
+          account.keypairs.destroy_all
+          Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key, expires_at: 1.minute.ago)
+        end
+
+        it { is_expected.to be false }
+      end
+    end
+
+    context 'when the ML-DSA-87 keypair expires in the future' do
+      before do
+        account.keypairs.destroy_all
+        Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key, expires_at: 1.day.from_now)
+      end
+
+      it { is_expected.to be true }
     end
   end
 end

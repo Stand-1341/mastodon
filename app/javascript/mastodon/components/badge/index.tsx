@@ -11,6 +11,7 @@ import IconVerified from '@/images/icons/icon_verified.svg?react';
 import { isRedesignEnabled } from '@/mastodon/utils/environment';
 import type { OnAttributeHandler } from '@/mastodon/utils/html';
 import BlockIcon from '@/material-icons/400-24px/block.svg?react';
+import CheckIcon from '@/material-icons/400-24px/check.svg?react';
 import GroupsIcon from '@/material-icons/400-24px/group.svg?react';
 import SmartToyIcon from '@/material-icons/400-24px/smart_toy.svg?react';
 import VolumeOffIcon from '@/material-icons/400-24px/volume_off.svg?react';
@@ -176,6 +177,26 @@ export const BlockedBadge: FC<Partial<BadgeProps>> = ({ label, ...props }) => (
     {...props}
   />
 );
+
+export const PqcBadge: FC<PresetBadgeProps> = (props) => {
+  const intl = useIntl();
+  const label = intl.formatMessage({
+    id: 'account.badges.pqc_signed',
+    defaultMessage: 'Post-quantum signed',
+  });
+
+  return (
+    <Badge
+      variant='accent'
+      icon={<CheckIcon />}
+      label={label}
+      title={label}
+      aria-label={label}
+      role='img'
+      {...props}
+    />
+  );
+};
 
 const onAttribute: OnAttributeHandler = (name, value, tagName) => {
   if (name === 'rel' && tagName === 'a') {

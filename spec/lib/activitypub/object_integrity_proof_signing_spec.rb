@@ -101,7 +101,7 @@ RSpec.describe ActivityPub::ObjectIntegrityProof, '#sign!' do
   end
 
   it 'rejects a missing key without automatically provisioning one' do
-    account
+    account.keypairs.where(type: :'ml-dsa-87').delete_all
 
     expect { described_class.new(document).sign!(account) }.to raise_error(ArgumentError, /usable local ML-DSA/)
     expect(account.keypairs.pluck(:type)).to eq(['rsa'])

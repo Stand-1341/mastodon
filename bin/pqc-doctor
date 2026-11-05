@@ -1,0 +1,291 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Reports whether this runtime can actually create and use ML-DSA-87 keys.
+# Standard library only, so it is safe to run inside the app image or on a
+# bare host. It never prints a backtrace as its primary output.
+
+require 'rubygems'
+require 'openssl'
+require 'socket'
+require 'timeout'
+require 'uri'
+
+class PqcDoctor
+  MIN_OPENSSL = '3.5.0'
+
+  SWITCHES = [
+    ['PQC_ACTIVITYPUB_SIGNING',        'outgoing ActivityPub ML-DSA proofs (enabled unless set to false)'],
+    ['PQC_ACTIVITYPUB_REQUIRE_PROOF',  'require an ML-DSA proof on inbound ActivityPub activities'],
+    ['PQC_PRIVATE_MEDIA_ENCRYPTION',   'private-media encryption at rest'],
+    ['PQC_REQUIRE_HYBRID_DB_TLS',      'require hybrid post-quantum TLS to PostgreSQL'],
+    ['PQC_HYBRID_DB_TLS_CA_PATH',      'CA bundle used when hybrid database TLS is required'],
+    ['PQC_MEDIA_KMS_KEY_ID',           'AWS KMS key used to wrap private-media data keys'],
+    ['PQC_MEDIA_LOCAL_KEK',            'local development key-encryption key for private media'],
+  ].freeze
+
+  Result = Struct.new(:status, :title, :detail)
+
+  def initialize
+    @results = []
+  end
+
+  def run
+    puts 'Mastodon PQC doctor'
+    puts '==================='
+    puts 'Checks whether this runtime can create and use ML-DSA-87 keys.'
+    puts
+
+    check_ruby
+    check_openssl
+    check_mldsa
+    report_switches
+    check_database
+
+    summarize
+  end
+
+  private
+
+  def add(status, title, detail = nil)
+    @results << Result.new(status, title, detail)
+    printf("%-4s %s\n", status, title)
+    puts "     #{detail}" if detail && !detail.empty?
+  end
+
+  def pass(title, detail = nil)
+    add('PASS', title, detail)
+  end
+
+  def fail_check(title, detail = nil)
+    add('FAIL', title, detail)
+  end
+
+  def warn_check(title, detail = nil)
+    add('WARN', title, detail)
+  end
+
+  def skip(title, detail = nil)
+    add('SKIP', title, detail)
+  end
+
+  def check_ruby
+    requirement = gemfile_ruby_requirement
+    current = Gem::Version.new(RUBY_VERSION)
+
+    if requirement.satisfied_by?(current)
+      pass("Ruby #{RUBY_VERSION} satisfies the Gemfile requirement (#{requirement})")
+    else
+      fail_check(
+        "Ruby #{RUBY_VERSION} does not satisfy the Gemfile requirement (#{requirement})",
+        'Use a Ruby in that range. The Dockerfile in this repository already pins one.'
+      )
+    end
+  rescue StandardError => e
+    warn_check("Could not compare Ruby #{RUBY_VERSION} with the Gemfile requirement (#{e.class}: #{e.message})")
+  end
+
+  def gemfile_ruby_requirement
+    path = File.expand_path('../Gemfile', __dir__)
+    line = File.foreach(path).find { |candidate| candidate =~ /^\s*ruby\s+['"]/ }
+    raise "no ruby directive found in #{path}" if line.nil?
+
+    parts = line.scan(/['"]([^'"]+)['"]/).flatten
+    raise "no version requirement in #{line.strip}" if parts.empty?
+
+    Gem::Requirement.new(parts)
+  end
+
+  def check_openssl
+    compile_version = OpenSSL::OPENSSL_VERSION
+    runtime_version = if OpenSSL.const_defined?(:OPENSSL_LIBRARY_VERSION)
+                        OpenSSL::OPENSSL_LIBRARY_VERSION
+                      else
+                        compile_version
+                      end
+
+    runtime = version_triplet(runtime_version)
+    compile = version_triplet(compile_version)
+
+    if runtime.nil? || compile.nil?
+      fail_check(
+        'Could not determine the OpenSSL version',
+        "Runtime: #{runtime_version.inspect}; build: #{compile_version.inspect}"
+      )
+      return
+    end
+
+    minimum = version_triplet(MIN_OPENSSL)
+    if compare_versions(runtime, minimum) >= 0
+      detail = nil
+      if runtime[0, 2] != compile[0, 2]
+        detail = "Ruby's OpenSSL extension was built against #{compile_version}, but the loaded library is #{runtime_version}."
+      end
+      pass("OpenSSL runtime #{runtime_version} is #{MIN_OPENSSL} or newer", detail)
+    else
+      fail_check(
+        "OpenSSL runtime #{runtime_version} is older than #{MIN_OPENSSL}; ML-DSA is unavailable",
+        "The loaded library is what matters, not the headers Ruby was built with (build: #{compile_version}). " \
+        'Use an image whose runtime OpenSSL is 3.5 or newer.'
+      )
+    end
+  end
+
+  def version_triplet(text)
+    match = text.to_s.match(/(\d+)\.(\d+)\.(\d+)/)
+    return nil if match.nil?
+
+    [match[1].to_i, match[2].to_i, match[3].to_i]
+  end
+
+  def compare_versions(left, right)
+    left <=> right
+  end
+
+  def check_mldsa
+    step = 'key generation'
+
+    key = OpenSSL::PKey.generate_key('ML-DSA-87')
+
+    step = 'PEM export'
+    private_pem = key.private_to_pem
+    public_pem = key.public_to_pem
+    raise 'private_to_pem returned an empty string' if private_pem.to_s.empty?
+    raise 'public_to_pem returned an empty string' if public_pem.to_s.empty?
+
+    step = 'sign/verify round-trip'
+    challenge = OpenSSL::Random.random_bytes(32)
+    signature = key.sign(nil, challenge)
+    verified = OpenSSL::PKey.read(public_pem).verify(nil, signature, challenge)
+    raise 'verification returned false' unless verified
+
+    pass('ML-DSA-87 key generation, PEM export and sign/verify round-trip all work')
+  rescue StandardError, NotImplementedError => e
+    message = e.message.to_s.gsub(/\s+/, ' ')[0, 300]
+    fail_check(
+      "ML-DSA-87 #{step} failed: #{e.class}: #{message}",
+      'ML-DSA-87 needs OpenSSL 3.5 or newer with the default provider. ' \
+      "Reproduce with `ruby -ropenssl -e 'OpenSSL::PKey.generate_key(\"ML-DSA-87\")'` in the same container."
+    )
+  end
+
+  def report_switches
+    puts
+    puts 'PQC-related environment switches'
+    puts '--------------------------------'
+
+    known = SWITCHES.map(&:first)
+    SWITCHES.each do |name, description|
+      value = ENV[name]
+      if value.nil? || value.empty?
+        add('INFO', "#{name} is unset", description)
+      else
+        add('INFO', "#{name}=#{display_value(name, value)}", description)
+      end
+    end
+
+    extras = ENV.keys.grep(/\APQC_/).sort - known
+    extras.each do |name|
+      add('INFO', "#{name}=#{display_value(name, ENV[name])}", 'set outside the documented switch list')
+    end
+
+    if ENV['PQC_ACTIVITYPUB_SIGNING'] == 'false'
+      warn_check(
+        'PQC ActivityPub signing is explicitly disabled',
+        'Accounts can still hold ML-DSA keys and show the badge, but outgoing posts will not carry ML-DSA proofs. ' \
+        'Remove PQC_ACTIVITYPUB_SIGNING=false, or set it to true, to enable signing.'
+      )
+    end
+  end
+
+  def display_value(name, value)
+    return '<redacted>' if name =~ /SECRET|PASS|TOKEN|(^|_)KEY|KEK/
+
+    value
+  end
+
+  def check_database
+    target = begin
+      database_target
+    rescue URI::InvalidURIError => e
+      fail_check("DATABASE_URL could not be parsed: #{e.message}", 'Fix DATABASE_URL, or unset it and use DB_HOST/DB_PORT.')
+      return
+    end
+
+    if target.nil?
+      skip('Database reachability: neither DATABASE_URL nor DB_HOST is set')
+      return
+    end
+
+    if target[:socket]
+      if File.socket?(target[:host])
+        pass("Database socket #{target[:host]} exists (reachability only; credentials are not checked)")
+      else
+        fail_check("Database socket #{target[:host]} does not exist", 'Start the database container, or fix DB_HOST.')
+      end
+      return
+    end
+
+    Timeout.timeout(3) do
+      Socket.tcp(target[:host], target[:port], connect_timeout: 2, &:close)
+    end
+    pass(
+      "Database TCP endpoint #{target[:host]}:#{target[:port]} is reachable",
+      'Reachability only; credentials and schema are not checked.'
+    )
+  rescue Timeout::Error, StandardError => e
+    fail_check(
+      "Database TCP endpoint #{target[:host]}:#{target[:port]} is not reachable: #{e.class}: #{e.message.to_s.gsub(/\s+/, ' ')[0, 200]}",
+      'Start the database container, or fix DATABASE_URL/DB_HOST/DB_PORT.'
+    )
+  end
+
+  def database_target
+    if ENV['DATABASE_URL'] && !ENV['DATABASE_URL'].empty?
+      uri = URI.parse(ENV['DATABASE_URL'])
+      return nil if uri.host.nil?
+
+      return { host: uri.host, port: uri.port || 5432, socket: false }
+    end
+
+    host = ENV['DB_HOST']
+    return nil if host.nil? || host.empty?
+    return { host: host, port: nil, socket: true } if host.start_with?('/')
+
+    { host: host, port: (ENV['DB_PORT'] || 5432).to_i, socket: false }
+  end
+
+  def summarize
+    failures = @results.count { |result| result.status == 'FAIL' }
+    warnings = @results.count { |result| result.status == 'WARN' }
+    passes   = @results.count { |result| result.status == 'PASS' }
+
+    puts
+    if failures.zero?
+      puts "RESULT: ready for ML-DSA-87 (#{passes} passed, #{warnings} warning(s))."
+      if ENV['PQC_ACTIVITYPUB_SIGNING'] == 'false'
+        puts 'Next: set PQC_ACTIVITYPUB_SIGNING=true (or unset it) and restart the web and sidekiq services to sign posts.'
+      else
+        puts 'Next: sign in and open a local profile; its header should show the "Post-quantum signed" badge.'
+      end
+    else
+      puts "RESULT: #{failures} check(s) failed; ML-DSA-87 signing cannot work on this runtime."
+      puts 'Next: fix the first FAIL above, then run `make doctor` again.'
+    end
+
+    exit(failures.zero? ? 0 : 1)
+  end
+end
+
+begin
+  PqcDoctor.new.run
+rescue Interrupt
+  puts
+  puts 'Interrupted.'
+  exit 130
+rescue StandardError => e
+  message = e.message.to_s.gsub(/\s+/, ' ')[0, 300]
+  puts "FAIL  The doctor could not complete: #{e.class}: #{message}"
+  puts 'Next: re-run `make doctor`; if it keeps failing, report the message above.'
+  exit 1
+end

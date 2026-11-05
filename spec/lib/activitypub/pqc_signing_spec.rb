@@ -18,20 +18,14 @@ RSpec.describe ActivityPub::PqcSigning do
     }
   end
 
-  context 'when disabled' do
+  context 'when explicitly disabled' do
     it 'preserves RSA-only signing without querying or generating PQC keys' do
       rsa_key = account.keypair(type: :rsa)
       allow(account).to receive(:keypair).and_call_original
       allow(account).to receive(:keypair).with(type: :'ml-dsa-87').and_raise('Unexpected PQC key lookup')
 
-      ClimateControl.modify PQC_ACTIVITYPUB_SIGNING: nil do
-        expect(signed['signature']).to include('type' => 'RsaSignature2017', 'creator' => rsa_key.full_uri)
-        expect(signed).to_not have_key('proof')
-      end
-    end
-
-    it 'does not enable signing for other truthy-looking strings' do
       ClimateControl.modify PQC_ACTIVITYPUB_SIGNING: 'false' do
+        expect(signed['signature']).to include('type' => 'RsaSignature2017', 'creator' => rsa_key.full_uri)
         expect(signed).to_not have_key('proof')
       end
     end
@@ -43,7 +37,7 @@ RSpec.describe ActivityPub::PqcSigning do
     end
 
     it 'preserves RSA signing when no PQC key is provisioned' do
-      account
+      account.keypairs.where(type: :'ml-dsa-87').delete_all
       key_count = Keypair.count
 
       expect(signed).to_not have_key('proof')
@@ -75,6 +69,20 @@ RSpec.describe ActivityPub::PqcSigning do
         expect(ActivityPub::ObjectIntegrityProof.new(signed.without('signature')).verify_actor!).to eq(receiver_actor)
         expect(account.keypair(type: :rsa).reload.attributes).to eq(original_rsa)
         expect(document).to eq(original_document)
+      end
+
+      it 'signs by default when PQC_ACTIVITYPUB_SIGNING is unset' do
+        ClimateControl.modify PQC_ACTIVITYPUB_SIGNING: nil do
+          expect(signed['proof']['cryptosuite']).to eq('mldsa87-jcs-2024')
+          expect(ActivityPub::LinkedDataSignature.new(signed).verify_actor!).to eq(receiver_actor)
+          expect(ActivityPub::ObjectIntegrityProof.new(signed.without('signature')).verify_actor!).to eq(receiver_actor)
+        end
+      end
+
+      it 'treats any value other than "false" as enabled' do
+        ClimateControl.modify PQC_ACTIVITYPUB_SIGNING: '0' do
+          expect(signed['proof']['cryptosuite']).to eq('mldsa87-jcs-2024')
+        end
       end
 
       it 'preserves an object-form caller context while adding proof contexts' do

@@ -49,6 +49,9 @@ RSpec.describe ActivityPub::GeneratePqcKeyService do
   end
 
   describe '#call' do
+    # Accounts are now provisioned on creation, so drop that key to exercise generation itself.
+    before { account.keypairs.where(type: :'ml-dsa-87').delete_all }
+
     it 'adds an encrypted key with a persistent, unique fragment without changing RSA or legacy keys' do
       rsa_key = account.keypair(type: :rsa)
       original_account = account.reload.attributes

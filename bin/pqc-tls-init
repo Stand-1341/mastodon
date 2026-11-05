@@ -1,0 +1,346 @@
+#!/bin/sh
+#
+# pqc-tls-init - generate the PostgreSQL TLS material for docker-compose.pqc.yml
+#
+# Writes, relative to this checkout:
+#   secrets/postgres-tls/ca.crt                  CA certificate            (0644)
+#   secrets/postgres-tls/ca.key                  CA private key            (0600)
+#   secrets/postgres-tls/server.crt              server cert, SAN DNS:db   (0644)
+#   secrets/postgres-tls/server.key              server private key        (0600)
+#   secrets/postgres-superuser-password          random 32-byte hex secret (0600)
+#
+# The server certificate is signed by the generated CA, carries
+# subjectAltName=DNS:db (the Compose service name), and is verified before the
+# script reports success. The matching superuser password is what
+# docker-compose.pqc.yml reads as its Docker secret.
+#
+# Safe to re-run. An existing CA is reused and never replaced without --force;
+# an existing superuser password is never replaced at all, because rotating it
+# would silently desynchronise it from the PostgreSQL role it was created for.
+#
+# Requires only a POSIX shell and the OpenSSL 1.1.1+ command-line tool (the
+# system LibreSSL build lacks -verify_hostname). No Ruby, Docker, or network.
+
+set -eu
+
+program=$(basename "$0")
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+repo_root=$(dirname "$script_dir")
+
+secrets_dir=$repo_root/secrets
+san=db
+server_cn=mastodon-pqc-postgres
+days=825
+ca_days=3650
+force=0
+rotate_server=0
+
+usage() {
+  cat <<EOF
+Usage: $program [options]
+
+Generate the PostgreSQL TLS certificate set and superuser password that
+docker-compose.pqc.yml expects under ./secrets.
+
+Options:
+  --force              Regenerate the CA and the server certificate. The
+                       superuser password is still left untouched.
+  --rotate-server      Issue a new server certificate signed by the existing
+                       CA (use before expiry; does not touch the CA).
+  --days N             Server certificate lifetime in days (default: $days).
+  --ca-days N          CA lifetime in days (default: $ca_days).
+  --san NAME           Server certificate subjectAltName DNS entry
+                       (default: $san; must match the Compose service name).
+  --secrets-dir DIR    Directory that holds postgres-tls/ and the superuser
+                       password file (default: <checkout>/secrets).
+  -h, --help           Show this help.
+
+The default paths are the ones Compose mounts, so run this from the checkout
+and pass no path options for a normal deployment.
+
+Examples:
+  bin/pqc-tls-init
+  bin/pqc-tls-init --rotate-server
+  bin/pqc-tls-init --force          # new CA: recreate db, web, streaming, sidekiq
+EOF
+}
+
+die() {
+  printf '%s: %s\n' "$program" "$*" >&2
+  exit 1
+}
+
+note() {
+  printf '%s\n' "$*"
+}
+
+require_uint() {
+  case $2 in
+    ''|*[!0-9]*) die "$1 requires a positive integer, got: $2" ;;
+  esac
+  [ "$2" -gt 0 ] || die "$1 requires a value greater than zero"
+}
+
+while [ $# -gt 0 ]; do
+  case $1 in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --force)
+      force=1
+      shift
+      ;;
+    --rotate-server)
+      rotate_server=1
+      shift
+      ;;
+    --days)
+      [ $# -ge 2 ] || die "--days requires a value"
+      days=$2
+      shift 2
+      ;;
+    --ca-days)
+      [ $# -ge 2 ] || die "--ca-days requires a value"
+      ca_days=$2
+      shift 2
+      ;;
+    --san)
+      [ $# -ge 2 ] || die "--san requires a value"
+      san=$2
+      shift 2
+      ;;
+    --secrets-dir)
+      [ $# -ge 2 ] || die "--secrets-dir requires a value"
+      secrets_dir=$2
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      die "unknown option: $1 (try --help)"
+      ;;
+    *)
+      die "unexpected argument: $1 (try --help)"
+      ;;
+  esac
+done
+
+require_uint --days "$days"
+require_uint --ca-days "$ca_days"
+case $san in
+  ''|*[!A-Za-z0-9.-]*) die "--san must be a DNS name (letters, digits, '.', '-'), got: $san" ;;
+esac
+case $san in
+  .*|*.) die "--san must not start or end with a dot, got: $san" ;;
+esac
+
+command -v openssl >/dev/null 2>&1 || die 'openssl is required but was not found in PATH'
+
+# Never create group- or world-accessible key material, whatever the caller's
+# umask is.
+umask 077
+
+tls_dir=$secrets_dir/postgres-tls
+password_file=$secrets_dir/postgres-superuser-password
+
+if [ -e "$secrets_dir" ] && [ ! -d "$secrets_dir" ]; then
+  die "$secrets_dir exists but is not a directory"
+fi
+if [ -e "$tls_dir" ] && [ ! -d "$tls_dir" ]; then
+  die "$tls_dir exists but is not a directory"
+fi
+
+[ -d "$secrets_dir" ] || mkdir -p "$secrets_dir"
+chmod 0700 "$secrets_dir"
+[ -d "$tls_dir" ] || mkdir -p "$tls_dir"
+chmod 0700 "$tls_dir"
+
+if [ -e "$password_file" ] && [ ! -f "$password_file" ]; then
+  die "$password_file exists but is not a regular file"
+fi
+
+# Refuse to operate on a directory that other users can write to: they could
+# swap the certificate files between generation and container start.
+if [ -n "$(find "$secrets_dir" -maxdepth 0 \( -perm -002 -o -perm -020 \) -print 2>/dev/null)" ]; then
+  die "$secrets_dir is group- or world-writable; run: chmod go-w '$secrets_dir'"
+fi
+
+# Refuse to build on top of private files that are already exposed.
+for existing in "$tls_dir/ca.key" "$tls_dir/server.key" "$password_file"; do
+  [ -f "$existing" ] || continue
+  if [ -n "$(find "$existing" -maxdepth 0 \( -perm -004 -o -perm -040 \) -print 2>/dev/null)" ]; then
+    die "$existing is readable by group or others; run: chmod 600 '$existing'"
+  fi
+done
+
+work=$tls_dir/.pqc-tls-init.$$
+mkdir "$work"
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+
+ca_crt=$tls_dir/ca.crt
+ca_key=$tls_dir/ca.key
+server_crt=$tls_dir/server.crt
+server_key=$tls_dir/server.key
+
+verify_server_cert() {
+  # $1 ca cert, $2 server cert, $3 server key, $4 expected DNS name
+  openssl verify -CAfile "$1" -verify_hostname "$4" "$2" >/dev/null 2>&1 || return 1
+  cert_digest=$(openssl x509 -in "$2" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | openssl dgst -sha256)
+  key_digest=$(openssl pkey -in "$3" -pubout -outform DER 2>/dev/null | openssl dgst -sha256)
+  [ -n "$cert_digest" ] && [ "$cert_digest" = "$key_digest" ]
+}
+
+cert_fingerprint() {
+  openssl x509 -in "$1" -noout -fingerprint -sha256 | sed 's/^.*=//'
+}
+
+# ---------------------------------------------------------------------------
+# CA
+# ---------------------------------------------------------------------------
+
+if [ -f "$ca_crt" ] && [ -f "$ca_key" ] && [ "$force" -eq 0 ]; then
+  openssl x509 -in "$ca_crt" -noout -checkend 0 >/dev/null 2>&1 || die "existing CA $ca_crt has expired; re-run with --force to replace it"
+  openssl x509 -in "$ca_crt" -noout -text | grep -q 'CA:TRUE' || die "existing $ca_crt is not a CA certificate; re-run with --force"
+  cp "$ca_crt" "$work/ca.crt"
+  cp "$ca_key" "$work/ca.key"
+  ca_action='kept existing'
+elif [ -f "$ca_crt" ] && [ ! -f "$ca_key" ] && [ "$force" -eq 0 ]; then
+  die "$ca_crt exists but $ca_key does not; restore the key or re-run with --force to replace the CA"
+elif [ ! -f "$ca_crt" ] && [ -f "$ca_key" ] && [ "$force" -eq 0 ]; then
+  die "$ca_key exists but $ca_crt does not; restore the certificate or re-run with --force to replace the CA"
+else
+  cat > "$work/ca.cnf" <<EOF
+[req]
+distinguished_name = req_dn
+prompt = no
+x509_extensions = ca_ext
+
+[req_dn]
+CN = $server_cn-ca
+
+[ca_ext]
+basicConstraints = critical,CA:TRUE,pathlen:0
+keyUsage = critical,keyCertSign,cRLSign
+subjectKeyIdentifier = hash
+EOF
+  openssl req -x509 -newkey rsa:4096 -sha256 -days "$ca_days" -nodes \
+    -keyout "$work/ca.key" -out "$work/ca.crt" -config "$work/ca.cnf" 2>/dev/null \
+    || die 'failed to generate the CA'
+  ca_action='generated new'
+fi
+
+# ---------------------------------------------------------------------------
+# Server certificate
+# ---------------------------------------------------------------------------
+
+issue_server=0
+if [ ! -f "$server_crt" ] || [ ! -f "$server_key" ]; then
+  issue_server=1
+elif [ "$force" -eq 1 ] || [ "$rotate_server" -eq 1 ]; then
+  issue_server=1
+fi
+
+if [ "$issue_server" -eq 0 ]; then
+  if ! verify_server_cert "$work/ca.crt" "$server_crt" "$server_key" "$san"; then
+    die "existing server certificate is not valid for DNS:$san, does not chain to $ca_crt, or does not match $server_key; re-run with --rotate-server (or --force for a new CA)"
+  fi
+  server_action='kept existing'
+else
+  cat > "$work/server.cnf" <<EOF
+[req]
+distinguished_name = req_dn
+prompt = no
+req_extensions = server_ext
+
+[req_dn]
+CN = $server_cn
+
+[server_ext]
+basicConstraints = critical,CA:FALSE
+keyUsage = critical,digitalSignature,keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = DNS:$san
+EOF
+  openssl req -new -newkey rsa:3072 -sha256 -nodes \
+    -keyout "$work/server.key" -out "$work/server.csr" -config "$work/server.cnf" 2>/dev/null \
+    || die 'failed to generate the server key and certificate request'
+  openssl x509 -req -in "$work/server.csr" -CA "$work/ca.crt" -CAkey "$work/ca.key" \
+    -CAcreateserial -days "$days" -sha256 \
+    -extfile "$work/server.cnf" -extensions server_ext \
+    -out "$work/server.crt" 2>/dev/null \
+    || die 'failed to sign the server certificate'
+  verify_server_cert "$work/ca.crt" "$work/server.crt" "$work/server.key" "$san" \
+    || die 'the generated server certificate failed verification; nothing was installed'
+  server_action='generated new'
+fi
+
+# ---------------------------------------------------------------------------
+# Superuser password
+# ---------------------------------------------------------------------------
+
+if [ -f "$password_file" ]; then
+  password_action='kept existing'
+else
+  openssl rand -hex 32 > "$work/postgres-superuser-password"
+  password_action='generated new'
+fi
+
+# ---------------------------------------------------------------------------
+# Install
+# ---------------------------------------------------------------------------
+
+if [ "$ca_action" = 'generated new' ]; then
+  cp "$work/ca.crt" "$ca_crt"
+  cp "$work/ca.key" "$ca_key"
+fi
+
+if [ "$issue_server" -eq 1 ]; then
+  cp "$work/server.crt" "$server_crt"
+  cp "$work/server.key" "$server_key"
+fi
+
+if [ "$password_action" = 'generated new' ]; then
+  cp "$work/postgres-superuser-password" "$password_file"
+fi
+
+chmod 0644 "$ca_crt" "$server_crt"
+chmod 0600 "$ca_key" "$server_key" "$password_file"
+
+# ---------------------------------------------------------------------------
+# Final safety check and report
+# ---------------------------------------------------------------------------
+
+for private_file in "$ca_key" "$server_key" "$password_file"; do
+  if [ -n "$(find "$private_file" -maxdepth 0 \( -perm -004 -o -perm -040 \) -print 2>/dev/null)" ]; then
+    die "$private_file is readable by group or others after install; refusing to continue"
+  fi
+done
+
+openssl verify -CAfile "$ca_crt" -verify_hostname "$san" "$server_crt" >/dev/null 2>&1 \
+  || die 'installed certificate failed final verification'
+
+note "PostgreSQL TLS material ready (CA: $ca_action; server cert: $server_action)."
+note ''
+printf '  %-62s %s\n' "$tls_dir/ca.crt" 'CA certificate (0644)'
+printf '  %-62s %s\n' "$tls_dir/ca.key" 'CA private key (0600; back it up, never serve it)'
+printf '  %-62s %s\n' "$tls_dir/server.crt" "server certificate, SAN DNS:$san (0644)"
+printf '  %-62s %s\n' "$tls_dir/server.key" 'server private key (0600)'
+printf '  %-62s %s\n' "$password_file" "superuser password (0600; $password_action)"
+note ''
+note "  CA SHA-256:     $(cert_fingerprint "$ca_crt")"
+note "  server SHA-256: $(cert_fingerprint "$server_crt")"
+note "  server expires: $(openssl x509 -in "$server_crt" -noout -enddate | sed 's/^notAfter=//')"
+note ''
+note 'Next:'
+note '  docker compose -f docker-compose.yml -f docker-compose.pqc.yml config -q'
+note '  docker compose -f docker-compose.yml -f docker-compose.pqc.yml build db web streaming'
+note '  docker compose -f docker-compose.yml -f docker-compose.pqc.yml up -d db redis'
+note '  # then follow docs/DEPLOY.md for db:prepare, the first admin, and key backfill'
+if [ "$ca_action" = 'generated new' ]; then
+  note ''
+  note 'The CA is new: recreate every service that mounts it (db, web, streaming, sidekiq)'
+  note 'with `up -d --force-recreate` before expecting connections to verify.'
+fi

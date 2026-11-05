@@ -2194,13 +2194,13 @@ export const PqcMessagingPage: FC = () => {
   };
 
   return (
-    <Column label='Experimental post-quantum encrypted messaging'>
-      <ColumnHeader title='Experimental encrypted messaging' />
+    <Column label='Post-quantum encrypted messaging'>
+      <ColumnHeader title='Encrypted messaging' />
       <div className='scrollable'>
         <div className='column__berlin'>
           <p role='status'>
-            This is an experimental MLS prototype. Messages here are separate
-            from ordinary Mastodon direct messages.
+            Post-quantum encrypted messaging, built on MLS. Messages here are
+            separate from ordinary Mastodon direct messages.
           </p>
           <p>
             The server relays encrypted payloads but still sees conversation
