@@ -16,6 +16,7 @@ import {
   BlockedBadge,
   GroupBadge,
   MutedBadge,
+  PqcBadge,
 } from '../badge';
 
 import classes from './styles.module.scss';
@@ -73,6 +74,9 @@ export const AccountBadges: FC<{ accountId: string }> = ({ accountId }) => {
   }
   if (account.group) {
     badges.push(<GroupBadge key='group-badge' />);
+  }
+  if (account.pqc_signed) {
+    badges.push(<PqcBadge key='pqc-badge' />);
   }
   if (relationship) {
     if (relationship.blocking) {

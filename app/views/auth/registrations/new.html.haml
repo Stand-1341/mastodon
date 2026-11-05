@@ -80,5 +80,13 @@
               required: false,
               wrapper: :with_label
 
+  .fields-group
+    .input.with_label.boolean.optional
+      %label.checkbox
+        = check_box_tag 'user[pqc_signing]', '1', false, id: 'user_pqc_signing'
+      .label_input
+        %label.boolean{ for: 'user_pqc_signing' }= t('auth.registrations.pqc_signing')
+      %span.hint= t('auth.registrations.pqc_signing_hint')
+
   .actions
     = f.button :button, @invite&.bypass_approval? ? t('auth.register') : sign_up_message, type: :submit

@@ -138,4 +138,24 @@ RSpec.describe REST::AccountSerializer do
       end
     end
   end
+
+  describe 'pqc_signed' do
+    include PqcKeyProvisioningHelpers
+
+    context 'when the account has no ML-DSA-87 keypair' do
+      it 'serializes pqc_signed as false' do
+        expect(subject).to include('pqc_signed' => false)
+      end
+    end
+
+    context 'when the account has a usable ML-DSA-87 keypair' do
+      before do
+        Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key)
+      end
+
+      it 'serializes pqc_signed as true' do
+        expect(subject).to include('pqc_signed' => true)
+      end
+    end
+  end
 end

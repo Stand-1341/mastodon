@@ -39,6 +39,9 @@ class Auth::RegistrationsController < Devise::RegistrationsController
         session[:created_by_app_id] = session.delete(:registration_app_id) if session[:registration_app_id]
 
         fulfil_reauth_request
+
+        # Key provisioning is best-effort: a failure must never cost the user their account
+        provision_pqc_key!(resource) if pqc_signing_requested?
       end
     end
   rescue ActiveRecord::MultiparameterAssignmentErrors => e
@@ -193,6 +196,25 @@ class Auth::RegistrationsController < Devise::RegistrationsController
 
   def validated_accept_token?
     session[:accept_token].present? && params[:accept] == session[:accept_token]
+  end
+
+  def pqc_signing_requested?
+    ActiveModel::Type::Boolean.new.cast(params.dig(:user, :pqc_signing))
+  end
+
+  def provision_pqc_key!(user)
+    return unless user.account&.local?
+
+    ActivityPub::GeneratePqcKeyService.new.call(user.account)
+  rescue StandardError => e
+    log_pqc_provisioning_failure(user, e)
+  end
+
+  def log_pqc_provisioning_failure(user, error)
+    Rails.logger.warn("Could not provision ML-DSA-87 signing key for @#{user.account&.username}: #{error.class}: #{error.message}")
+  rescue StandardError
+    # Logging must not turn a failed provisioning into a failed registration either
+    nil
   end
 
   def is_flashing_format? # rubocop:disable Naming/PredicatePrefix

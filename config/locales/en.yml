@@ -1467,6 +1467,9 @@ en:
       saml: SAML
     register: Sign up
     registration_closed: "%{instance} is not accepting new members"
+    registrations:
+      pqc_signing: Create a post-quantum signing key
+      pqc_signing_hint: This optional key is generated and stored server-side, so there is nothing for you to manage.
     resend_confirmation: Resend confirmation link
     reset_password: Reset password
     rules:

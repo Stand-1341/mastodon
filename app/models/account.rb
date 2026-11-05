@@ -368,6 +368,10 @@ class Account < ApplicationRecord
     end
   end
 
+  def pqc_signed?
+    keypair(type: :'ml-dsa-87').present?
+  end
+
   def tags_as_strings=(tag_names)
     hashtags_map = Tag.find_or_create_by_names(tag_names).index_by(&:name)
 

@@ -959,4 +959,61 @@ RSpec.describe Account do
       end
     end
   end
+
+  describe '#pqc_signed?' do
+    include PqcKeyProvisioningHelpers
+
+    subject { account.pqc_signed? }
+
+    let(:account) { Fabricate(:account) }
+
+    context 'when the account has no keypairs' do
+      before { account.keypairs.destroy_all }
+
+      it { is_expected.to be false }
+    end
+
+    context 'when the account only has an RSA keypair' do
+      before do
+        account.keypairs.destroy_all
+        Fabricate(:keypair, account: account, type: :rsa)
+      end
+
+      it { is_expected.to be false }
+    end
+
+    context 'when the account has a usable ML-DSA-87 keypair' do
+      before do
+        Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key)
+      end
+
+      it { is_expected.to be true }
+    end
+
+    context 'when the ML-DSA-87 keypair is not usable' do
+      context 'when it has been revoked' do
+        before do
+          Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key, revoked: true)
+        end
+
+        it { is_expected.to be false }
+      end
+
+      context 'when it has expired' do
+        before do
+          Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key, expires_at: 1.minute.ago)
+        end
+
+        it { is_expected.to be false }
+      end
+    end
+
+    context 'when the ML-DSA-87 keypair expires in the future' do
+      before do
+        Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key, expires_at: 1.day.from_now)
+      end
+
+      it { is_expected.to be true }
+    end
+  end
 end
