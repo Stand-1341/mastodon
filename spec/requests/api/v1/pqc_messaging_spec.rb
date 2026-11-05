@@ -5,10 +5,6 @@ require 'rails_helper'
 RSpec.describe 'PQC messaging relay API' do
   include_context 'with API authentication', oauth_scopes: 'write:statuses'
 
-  around do |example|
-    ClimateControl.modify(PQC_E2EE_EXPERIMENTAL: 'true') { example.run }
-  end
-
   before do |example|
     next if example.metadata[:real_device_auth]
 
@@ -968,13 +964,6 @@ RSpec.describe 'PQC messaging relay API' do
       expect(response).to have_http_status(409)
     end
 
-    it 'hides the experimental endpoints when the feature flag is disabled' do
-      ClimateControl.modify(PQC_E2EE_EXPERIMENTAL: 'false') do
-        get '/api/v1/pqc_devices', headers: headers
-      end
-
-      expect(response).to have_http_status(404)
-    end
   end
 
   def create_conversation(account_id)

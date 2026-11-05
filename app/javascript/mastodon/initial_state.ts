@@ -30,7 +30,6 @@ interface InitialStateMeta {
   moved_to_account_id?: string;
   owner?: string;
   profile_directory: boolean;
-  pqc_e2ee_experimental?: boolean;
   registrations_open: boolean;
   reduce_motion: boolean;
   repository: string;
@@ -121,8 +120,6 @@ export const disableSwiping = getMeta('disable_swiping');
 export const disableHoverCards = getMeta('disable_hover_cards');
 export const disabledAccountId = getMeta('disabled_account_id');
 export const displayMedia = getMeta('display_media');
-export const pqcE2eeExperimental =
-  initialState?.meta.pqc_e2ee_experimental ?? false;
 export const domain = getMeta('domain');
 export const emojiStyle = getMeta('emoji_style') ?? 'auto';
 export const expandSpoilers = getMeta('expand_spoilers');

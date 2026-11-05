@@ -20,11 +20,7 @@ import { Icon } from 'mastodon/components/icon';
 import { IconWithBadge } from 'mastodon/components/icon_with_badge';
 import type { MastodonLocationDescriptor } from 'mastodon/components/router';
 import { useIdentity } from 'mastodon/identity_context';
-import {
-  pqcE2eeExperimental,
-  registrationsOpen,
-  sso_redirect,
-} from 'mastodon/initial_state';
+import { registrationsOpen, sso_redirect } from 'mastodon/initial_state';
 import { selectUnreadNotificationGroupsCount } from 'mastodon/selectors/notifications';
 import { useAppDispatch, useAppSelector } from 'mastodon/store';
 
@@ -39,7 +35,7 @@ export const messages = defineMessages({
   menu: { id: 'tabs_bar.menu', defaultMessage: 'Menu' },
   pqcMessaging: {
     id: 'tabs_bar.pqc_messaging',
-    defaultMessage: 'Encrypted messaging (experimental)',
+    defaultMessage: 'Encrypted messaging',
   },
   advancedUiQuickLinks: {
     id: 'tabs_bar.quick_links',
@@ -205,13 +201,11 @@ export const NavigationBar: React.FC = () => {
               icon={<Icon id='' icon={AddIcon} />}
             />
             <NotificationsButton />
-            {pqcE2eeExperimental && (
-              <IconLabelButton
-                title={intl.formatMessage(messages.pqcMessaging)}
-                to='/pqc'
-                icon={<Icon id='' icon={LockIcon} />}
-              />
-            )}
+            <IconLabelButton
+              title={intl.formatMessage(messages.pqcMessaging)}
+              to='/pqc'
+              icon={<Icon id='' icon={LockIcon} />}
+            />
           </>
         )}
 

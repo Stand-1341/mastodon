@@ -41,6 +41,52 @@ namespace :pqc do
     abort e.message
   end
 
+  desc 'Provision ML-DSA-87 keys for every local account that lacks a usable one (idempotent)'
+  task backfill: :environment do
+    accounts = Account.local
+    total = accounts.count
+    provisioned = 0
+    already_present = 0
+    failures = []
+
+    puts "Provisioning ML-DSA-87 keys for #{total} local accounts (progress every 100)..." if total.positive?
+
+    logger = ActiveRecord::Base.logger
+    previous_log_level = logger.level
+    logger.level = Logger::FATAL
+    begin
+      accounts.find_each.with_index(1) do |account, index|
+        begin
+          if account.pqc_signed?
+            already_present += 1
+          else
+            ActivityPub::GeneratePqcKeyService.new.call(account)
+            provisioned += 1
+          end
+        rescue StandardError => e
+          failures << { acct: account.acct, error: "#{e.class}: #{e.message}" }
+        ensure
+          if (index % 100).zero?
+            puts "Processed #{index}/#{total} local accounts (#{provisioned} provisioned, #{already_present} already had a key, #{failures.size} failed)"
+          end
+        end
+      end
+    ensure
+      logger.level = previous_log_level
+    end
+
+    report = {
+      local_accounts: total,
+      provisioned:,
+      already_present:,
+      failed: failures.size,
+      failures: failures.first(20),
+      failures_truncated: failures.size > 20,
+    }
+    puts JSON.pretty_generate(report)
+    abort "#{failures.size} local accounts could not be provisioned; see the report above" if failures.any?
+  end
+
   desc 'Verify that one local account can decrypt and use its stored ML-DSA-87 key'
   task :verify_key, [:username] => :environment do |_task, args|
     username = args[:username].to_s.strip.delete_prefix('@')
@@ -218,9 +264,9 @@ namespace :pqc do
         hybrid_group_enforced: database_tls_groups == ['X25519MLKEM768'],
       },
       activitypub: {
-        pqc_signing_enabled: ENV['PQC_ACTIVITYPUB_SIGNING'] == 'true',
+        pqc_signing_enabled: ENV['PQC_ACTIVITYPUB_SIGNING'] != 'false',
         pqc_inbound_proof_required: ENV['PQC_ACTIVITYPUB_REQUIRE_PROOF'] == 'true',
-        key_provisioning: 'explicit_per_account',
+        key_provisioning: 'automatic_on_create',
         local_account_count:,
         accounts_with_usable_ml_dsa_key:,
         accounts_missing_usable_ml_dsa_key: local_account_count - accounts_with_usable_ml_dsa_key,
@@ -239,7 +285,6 @@ namespace :pqc do
         account_quota_bytes: Pqc::PrivateMedia::CreateService::MAX_ACCOUNT_STORAGE,
       },
       encrypted_messaging: {
-        experimental_relay_enabled: ENV['PQC_E2EE_EXPERIMENTAL'] == 'true',
         protocol: 'MLS_256_XWING_AES256GCM_SHA512_MLDSA87',
         cipher_suite_id: '0xf011',
         cipher_suite_registry_status: 'ts-mls private-use; not IANA assigned',

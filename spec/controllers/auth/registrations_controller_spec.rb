@@ -314,67 +314,6 @@ RSpec.describe Auth::RegistrationsController do
       end
     end
 
-    describe 'PQC key provisioning' do
-      let(:service) { instance_double(ActivityPub::GeneratePqcKeyService, call: nil) }
-      let(:pqc_signing_params) { {} }
-
-      subject do
-        Setting.registrations_mode = 'open'
-        post :create, params: {
-          user: {
-            account_attributes: { username: 'test' },
-            email: 'test@example.com',
-            password: '12345678',
-            password_confirmation: '12345678',
-            agreement: 'true',
-          }.merge(pqc_signing_params),
-        }
-      end
-
-      before do
-        allow(ActivityPub::GeneratePqcKeyService).to receive(:new).and_return(service)
-      end
-
-      context 'when the pqc_signing checkbox is absent' do
-        it 'does not provision a PQC keypair' do
-          subject
-
-          expect(response).to redirect_to auth_setup_path
-          expect(User.find_by(email: 'test@example.com')).to be_present
-          expect(ActivityPub::GeneratePqcKeyService).to_not have_received(:new)
-        end
-      end
-
-      context 'when the pqc_signing checkbox is present' do
-        let(:pqc_signing_params) { { pqc_signing: '1' } }
-
-        it 'provisions a PQC keypair for the new account' do
-          subject
-
-          expect(response).to redirect_to auth_setup_path
-
-          user = User.find_by(email: 'test@example.com')
-          expect(user).to be_present
-          expect(service).to have_received(:call).once.with(user.account)
-        end
-      end
-
-      context 'when PQC key provisioning raises an unsupported runtime error' do
-        let(:pqc_signing_params) { { pqc_signing: '1' } }
-
-        before do
-          allow(service).to receive(:call).and_raise(ActivityPub::GeneratePqcKeyService::UnsupportedRuntimeError, 'OpenSSL 3.5 or later is required')
-        end
-
-        it 'still creates the user and redirects as usual' do
-          expect { subject }.to_not raise_error
-
-          expect(response).to redirect_to auth_setup_path
-          expect(User.find_by(email: 'test@example.com')).to be_present
-        end
-      end
-    end
-
     it_behaves_like 'registration mode based responses', :create
   end
 
