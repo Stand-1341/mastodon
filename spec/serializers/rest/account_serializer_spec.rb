@@ -143,6 +143,11 @@ RSpec.describe REST::AccountSerializer do
     include PqcKeyProvisioningHelpers
 
     context 'when the account has no ML-DSA-87 keypair' do
+      before do
+        # Auto-provisioning may have created one on a capable runtime.
+        account.keypairs.where(type: :'ml-dsa-87').delete_all
+      end
+
       it 'serializes pqc_signed as false' do
         expect(subject).to include('pqc_signed' => false)
       end
@@ -150,11 +155,47 @@ RSpec.describe REST::AccountSerializer do
 
     context 'when the account has a usable ML-DSA-87 keypair' do
       before do
+        account.keypairs.where(type: :'ml-dsa-87').delete_all
         Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key)
       end
 
       it 'serializes pqc_signed as true' do
         expect(subject).to include('pqc_signed' => true)
+      end
+    end
+
+    context 'when the only ML-DSA-87 keypair is revoked' do
+      before do
+        account.keypairs.where(type: :'ml-dsa-87').delete_all
+        Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key, revoked: true)
+      end
+
+      it 'serializes pqc_signed as false' do
+        expect(subject).to include('pqc_signed' => false)
+      end
+    end
+
+    context 'when the only ML-DSA-87 keypair has expired' do
+      before do
+        account.keypairs.where(type: :'ml-dsa-87').delete_all
+        Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key, expires_at: 1.day.ago)
+      end
+
+      it 'serializes pqc_signed as false' do
+        expect(subject).to include('pqc_signed' => false)
+      end
+    end
+
+    context 'when the ML-DSA-87 keypair is usable' do
+      before do
+        account.keypairs.where(type: :'ml-dsa-87').delete_all
+        Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key)
+      end
+
+      it 'serializes pqc_signed as a boolean rather than a string' do
+        expect(subject['pqc_signed']).to be(true)
+        expect(subject['pqc_signed']).to be_a(TrueClass)
+        expect(subject['pqc_signed']).to_not be_a(String)
       end
     end
   end

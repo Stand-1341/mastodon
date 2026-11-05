@@ -134,5 +134,62 @@ RSpec.describe Rake::Task do
       expect(report).to include('local_accounts' => 0, 'provisioned' => 0, 'already_present' => 0, 'failed' => 0)
       expect(remote.keypairs.where(type: :'ml-dsa-87')).to be_empty
     end
+
+    it 'reports zero counts without raising when there are no local accounts' do
+      stdout, stderr = run_backfill
+      report = report_from(stdout)
+
+      expect(report).to include(
+        'local_accounts' => 0,
+        'provisioned' => 0,
+        'already_present' => 0,
+        'failed' => 0,
+        'failures' => [],
+        'failures_truncated' => false
+      )
+      expect(stdout).to_not include('Provisioning ML-DSA-87 keys for')
+      expect(stderr).to_not include('local accounts could not be provisioned')
+    end
+
+    it 'reports every account as already present when the database is fully provisioned' do
+      accounts = %w[backfill_ready_one backfill_ready_two].map { |username| Fabricate(:account, username:) }
+      keypair_ids = accounts.map { |account| account.keypairs.reload.find_by!(type: :'ml-dsa-87').id }
+      keypair_count = Keypair.count
+
+      stdout, = run_backfill
+      report = report_from(stdout)
+
+      expect(report).to include(
+        'local_accounts' => 2,
+        'provisioned' => 0,
+        'already_present' => 2,
+        'failed' => 0,
+        'failures' => [],
+        'failures_truncated' => false
+      )
+      expect(accounts.map { |account| account.keypairs.reload.find_by!(type: :'ml-dsa-87').id }).to eq(keypair_ids)
+      expect(Keypair.count).to eq(keypair_count)
+    end
+
+    it 'truncates the failure list to 20 entries while counting every failure' do
+      accounts = Array.new(21) { |index| Fabricate(:account, username: "backfill_failed_#{index}") }
+      accounts.each { |account| account.keypairs.where(type: :'ml-dsa-87').delete_all }
+      service = ActivityPub::GeneratePqcKeyService.new
+      allow(ActivityPub::GeneratePqcKeyService).to receive(:new).and_return(service)
+      allow(service).to receive(:call).and_raise(StandardError, 'simulated provider failure')
+
+      stdout, = run_backfill
+      report = report_from(stdout)
+
+      expect(report).to include(
+        'local_accounts' => 21,
+        'provisioned' => 0,
+        'already_present' => 0,
+        'failed' => 21,
+        'failures_truncated' => true
+      )
+      expect(report['failures'].size).to eq(20)
+      expect(report['failures'].map { |failure| failure['acct'] }).to eq(accounts.first(20).map(&:acct))
+    end
   end
 end

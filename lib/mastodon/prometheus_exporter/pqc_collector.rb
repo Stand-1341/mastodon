@@ -9,7 +9,12 @@ module Mastodon
     # accounts or keypairs, because the endpoint is polled and the cost has to
     # stay flat no matter how large the server gets.
     class PqcCollector
+      # Two different names for the same thing: the Keypair enum value is
+      # lower-case, the algorithm name OpenSSL resolves is upper-case. Probing
+      # with the enum value risks reporting an unsupported runtime on a host
+      # that provisions keys fine, which would make this monitor lie.
       ML_DSA_TYPE = 'ml-dsa-87'
+      ML_DSA_OPENSSL_ALGORITHM = 'ML-DSA-87'
       EXPIRY_WINDOW = 7 * 24 * 60 * 60 # seven days, in seconds
       SIGNING_ENV = 'PQC_ACTIVITYPUB_SIGNING'
       EXPORTER_ENV = 'MASTODON_PROMETHEUS_EXPORTER_ENABLED'
@@ -121,7 +126,7 @@ module Mastodon
         def probe_capability
           return false unless OpenSSL::PKey.respond_to?(:generate_key)
 
-          OpenSSL::PKey.generate_key(ML_DSA_TYPE)
+          OpenSSL::PKey.generate_key(ML_DSA_OPENSSL_ALGORITHM)
           true
         rescue OpenSSL::OpenSSLError, NotImplementedError
           false

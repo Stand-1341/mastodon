@@ -992,6 +992,38 @@ RSpec.describe Account do
         expect(account.keypairs.where(type: :'ml-dsa-87')).to be_empty
         expect(OpenSSL::PKey).to_not have_received(:generate_key)
       end
+
+      it 'does not even call the provisioning service for a new remote account' do
+        allow(ActivityPub::GeneratePqcKeyService).to receive(:new).and_call_original
+
+        account = Fabricate(:remote_account)
+
+        expect(ActivityPub::GeneratePqcKeyService).to_not have_received(:new)
+        expect(account.keypairs.where(type: :'ml-dsa-87')).to be_empty
+      end
+
+      it 'does not duplicate the keypair when provisioning runs again' do
+        account = Fabricate(:account)
+        existing_key = account.keypairs.find_by!(type: :'ml-dsa-87')
+        existing_attributes = existing_key.attributes
+
+        expect { account.send(:provision_pqc_signing_key) }
+          .to_not change { account.keypairs.where(type: :'ml-dsa-87').count }
+
+        expect(existing_key.reload.attributes).to eq(existing_attributes)
+      end
+
+      it 'does not run when an existing local account is updated' do
+        account = Fabricate(:account)
+        account.keypairs.where(type: :'ml-dsa-87').delete_all
+        # Installed after creation so only update-time calls are recorded.
+        allow(ActivityPub::GeneratePqcKeyService).to receive(:new).and_call_original
+
+        account.update!(display_name: 'Renamed after creation')
+
+        expect(ActivityPub::GeneratePqcKeyService).to_not have_received(:new)
+        expect(account.keypairs.where(type: :'ml-dsa-87')).to be_empty
+      end
     end
 
     context 'when provisioning fails' do
@@ -1010,6 +1042,12 @@ RSpec.describe Account do
         expect(Account.exists?(account.id)).to be true
         expect(account.keypairs.where(type: :'ml-dsa-87')).to be_empty
         expect(Rails.logger).to have_received(:warn).with(/ML-DSA-87/)
+      end
+
+      it 'names the account in the warning so operators can find it' do
+        account = Fabricate(:account)
+
+        expect(Rails.logger).to have_received(:warn).with(a_string_including("@#{account.acct}"))
       end
     end
   end
