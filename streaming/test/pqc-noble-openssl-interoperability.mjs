@@ -1,6 +1,7 @@
-import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { rmSync, writeFileSync } from 'node:fs';
+
 import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
 
 const timestamp = Math.floor(Date.now() / 1000).toString();
@@ -8,9 +9,21 @@ const nonce = randomUUID();
 const deviceId = `interop-${randomUUID()}`;
 const signedBytes = `Mastodon-PQC-Device-Auth-v1\nGET\n/api/v1/pqc_devices\n${timestamp}\n${nonce}\n${'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'}`;
 const keyPair = ml_dsa87.keygen();
-const signature = ml_dsa87.sign(new TextEncoder().encode(signedBytes), keyPair.secretKey);
+const signature = ml_dsa87.sign(
+  new TextEncoder().encode(signedBytes),
+  keyPair.secretKey,
+);
 const fixturePath = '/tmp/pqc-noble-openssl-interoperability.json';
-writeFileSync(fixturePath, JSON.stringify({ deviceId, timestamp, nonce, publicKey: Buffer.from(keyPair.publicKey).toString('base64'), signature: Buffer.from(signature).toString('base64') }));
+writeFileSync(
+  fixturePath,
+  JSON.stringify({
+    deviceId,
+    timestamp,
+    nonce,
+    publicKey: Buffer.from(keyPair.publicKey).toString('base64'),
+    signature: Buffer.from(signature).toString('base64'),
+  }),
+);
 keyPair.secretKey.fill(0);
 
 const ruby = `

@@ -6,10 +6,14 @@ import process from 'node:process';
 import { configFromEnv, getPool } from '../database.js';
 
 const environment = process.env.NODE_ENV || 'development';
-const pool = getPool(configFromEnv(process.env, environment), environment, { debug() {} });
+const pool = getPool(configFromEnv(process.env, environment), environment, {
+  debug() {},
+});
 
 try {
-  const { rows: [connection] } = await pool.query(`
+  const {
+    rows: [connection],
+  } = await pool.query(`
     SELECT current_setting('ssl_groups') AS ssl_groups,
            ssl,
            version,

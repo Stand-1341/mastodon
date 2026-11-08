@@ -39,7 +39,6 @@ Keys are generated in memory for each run and are not written to disk. The verif
 
 The wire format signs a fixed ordered array of four nonempty strings with a versioned domain prefix. It rejects additional message fields. It is not RFC 8785 JCS, JSON-LD, an ActivityPub object proof, or an interoperable federation extension.
 
-
 ## Reading the benchmark
 
 The benchmark compares ML-DSA-87 with RSA-3072 using SHA-256 and PKCS#1 v1.5 signatures. These are distinct security choices, not equivalent security levels. It tests 128, 1,024, and 10,240 byte synthetic inputs with 20 warmups and 200 measured calls per operation/size. It measures crypto calls, excluding JSON formatting, key lookup, Base64, network, Rails, and AI inference. Key generation has 20 separate trials. Verification timings reuse one valid signature per payload. A single host/process/run in fixed order is exploratory evidence only. The correctness repetitions reuse one envelope and show behavior, not an attack-resistance probability. RSA is a comparison baseline, not a deployment recommendation.

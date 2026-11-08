@@ -8,7 +8,9 @@ import process from 'node:process';
 // eslint-disable-next-line import/extensions
 import { configFromEnv } from '../database.js';
 
-const directory = mkdtempSync(path.join(os.tmpdir(), 'mastodon-hybrid-db-config-'));
+const directory = mkdtempSync(
+  path.join(os.tmpdir(), 'mastodon-hybrid-db-config-'),
+);
 const caPath = path.join(directory, 'ca.pem');
 writeFileSync(caPath, 'test CA');
 
@@ -29,7 +31,11 @@ try {
   assert.equal(config.ssl.ca, 'test CA');
 
   assert.throws(
-    () => configFromEnv({ ...env, DATABASE_URL: 'postgresql://mastodon@other-db/mastodon' }, 'production'),
+    () =>
+      configFromEnv(
+        { ...env, DATABASE_URL: 'postgresql://mastodon@other-db/mastodon' },
+        'production',
+      ),
     /PQC_REQUIRE_HYBRID_DB_TLS requires DATABASE_URL to connect to db/,
   );
   assert.throws(
