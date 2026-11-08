@@ -1,0 +1,212 @@
+{
+  "recorded_at": "2026-11-08T21:44:50.217Z",
+  "environment": {
+    "node": "v24.14.0",
+    "openssl": "3.5.5",
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M1 Pro"
+  },
+  "methodology": {
+    "trials": 200,
+    "warmup": 20,
+    "keygen_trials": 20,
+    "payload": "repeated ASCII a, UTF-8 bytes; crypto operations only",
+    "order": "ML-DSA-87 then RSA; sizes ascending; sequential trials",
+    "limitations": "One host/process/run; synthetic payloads; no network, AI inference, Rails or Pi measurements; same valid signature reused in verification trials. Rejection trials reuse one envelope and test behavior, not statistical security."
+  },
+  "summary": [
+    {
+      "algorithm": "ML-DSA-87",
+      "operation": "keygen",
+      "payload_bytes": 0,
+      "n": 20,
+      "median_ms": 0.17933350000000026,
+      "p95_ms": 0.28825000000000145,
+      "mean_ms": 0.19418955000000082
+    },
+    {
+      "algorithm": "ML-DSA-87",
+      "operation": "sign",
+      "payload_bytes": 128,
+      "signature_bytes": 4627,
+      "public_key_spki_der_bytes": 2614,
+      "n": 200,
+      "median_ms": 0.5860830000000021,
+      "p95_ms": 1.5450419999999951,
+      "mean_ms": 0.7436228899999997
+    },
+    {
+      "algorithm": "ML-DSA-87",
+      "operation": "verify",
+      "payload_bytes": 128,
+      "signature_bytes": 4627,
+      "public_key_spki_der_bytes": 2614,
+      "n": 200,
+      "median_ms": 0.17775000000000318,
+      "p95_ms": 0.1881670000000213,
+      "mean_ms": 0.17980728500000026
+    },
+    {
+      "algorithm": "ML-DSA-87",
+      "operation": "sign",
+      "payload_bytes": 1024,
+      "signature_bytes": 4627,
+      "public_key_spki_der_bytes": 2614,
+      "n": 200,
+      "median_ms": 0.5993544999999756,
+      "p95_ms": 1.7410840000000007,
+      "mean_ms": 0.7816571000000019
+    },
+    {
+      "algorithm": "ML-DSA-87",
+      "operation": "verify",
+      "payload_bytes": 1024,
+      "signature_bytes": 4627,
+      "public_key_spki_der_bytes": 2614,
+      "n": 200,
+      "median_ms": 0.18131250000001842,
+      "p95_ms": 0.21399999999999864,
+      "mean_ms": 0.18728083500000225
+    },
+    {
+      "algorithm": "ML-DSA-87",
+      "operation": "sign",
+      "payload_bytes": 10240,
+      "signature_bytes": 4627,
+      "public_key_spki_der_bytes": 2614,
+      "n": 200,
+      "median_ms": 0.5959790000000567,
+      "p95_ms": 1.6951660000000857,
+      "mean_ms": 0.7450483400000035
+    },
+    {
+      "algorithm": "ML-DSA-87",
+      "operation": "verify",
+      "payload_bytes": 10240,
+      "signature_bytes": 4627,
+      "public_key_spki_der_bytes": 2614,
+      "n": 200,
+      "median_ms": 0.18964600000003884,
+      "p95_ms": 0.21937500000001364,
+      "mean_ms": 0.19482082999999478
+    },
+    {
+      "algorithm": "RSA-3072-PKCS1-v1_5-SHA256",
+      "operation": "keygen",
+      "payload_bytes": 0,
+      "n": 20,
+      "median_ms": 111.63602100000003,
+      "p95_ms": 261.411708,
+      "mean_ms": 139.62561250000005
+    },
+    {
+      "algorithm": "RSA-3072-PKCS1-v1_5-SHA256",
+      "operation": "sign",
+      "payload_bytes": 128,
+      "signature_bytes": 384,
+      "public_key_spki_der_bytes": 422,
+      "n": 200,
+      "median_ms": 1.4996045000000322,
+      "p95_ms": 1.5484160000000884,
+      "mean_ms": 1.5194468849999998
+    },
+    {
+      "algorithm": "RSA-3072-PKCS1-v1_5-SHA256",
+      "operation": "verify",
+      "payload_bytes": 128,
+      "signature_bytes": 384,
+      "public_key_spki_der_bytes": 422,
+      "n": 200,
+      "median_ms": 0.03225000000020373,
+      "p95_ms": 0.0343750000001819,
+      "mean_ms": 0.03267061500000182
+    },
+    {
+      "algorithm": "RSA-3072-PKCS1-v1_5-SHA256",
+      "operation": "sign",
+      "payload_bytes": 1024,
+      "signature_bytes": 384,
+      "public_key_spki_der_bytes": 422,
+      "n": 200,
+      "median_ms": 1.499583000000257,
+      "p95_ms": 1.5283330000002024,
+      "mean_ms": 1.5193797950000225
+    },
+    {
+      "algorithm": "RSA-3072-PKCS1-v1_5-SHA256",
+      "operation": "verify",
+      "payload_bytes": 1024,
+      "signature_bytes": 384,
+      "public_key_spki_der_bytes": 422,
+      "n": 200,
+      "median_ms": 0.03254099999958271,
+      "p95_ms": 0.03324999999949796,
+      "mean_ms": 0.03269269500001428
+    },
+    {
+      "algorithm": "RSA-3072-PKCS1-v1_5-SHA256",
+      "operation": "sign",
+      "payload_bytes": 10240,
+      "signature_bytes": 384,
+      "public_key_spki_der_bytes": 422,
+      "n": 200,
+      "median_ms": 1.507333000000017,
+      "p95_ms": 1.68554099999983,
+      "mean_ms": 1.550271880000014
+    },
+    {
+      "algorithm": "RSA-3072-PKCS1-v1_5-SHA256",
+      "operation": "verify",
+      "payload_bytes": 10240,
+      "signature_bytes": 384,
+      "public_key_spki_der_bytes": 422,
+      "n": 200,
+      "median_ms": 0.03866599999992104,
+      "p95_ms": 0.03895800000009331,
+      "mean_ms": 0.03877999500003625
+    }
+  ],
+  "correctness": [
+    {
+      "case": "original",
+      "trials": 200,
+      "accepted": 200,
+      "rejected": 0,
+      "expected_accept": true,
+      "passed": true
+    },
+    {
+      "case": "changed_content",
+      "trials": 200,
+      "accepted": 0,
+      "rejected": 200,
+      "expected_accept": false,
+      "passed": true
+    },
+    {
+      "case": "changed_identity",
+      "trials": 200,
+      "accepted": 0,
+      "rejected": 200,
+      "expected_accept": false,
+      "passed": true
+    },
+    {
+      "case": "wrong_key",
+      "trials": 200,
+      "accepted": 0,
+      "rejected": 200,
+      "expected_accept": false,
+      "passed": true
+    },
+    {
+      "case": "changed_signature",
+      "trials": 200,
+      "accepted": 0,
+      "rejected": 200,
+      "expected_accept": false,
+      "passed": true
+    }
+  ]
+}

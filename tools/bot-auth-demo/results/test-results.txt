@@ -1,0 +1,22 @@
+✔ original accepted (1.431875ms)
+✔ changed botId rejected (0.379292ms)
+✔ changed messageId rejected (0.85225ms)
+✔ changed createdAt rejected (0.251709ms)
+✔ changed content rejected (0.263875ms)
+✔ wrong trusted key rejected (0.452292ms)
+✔ wrong expected identity rejected (0.048083ms)
+✔ signature corruption rejected (0.271333ms)
+✔ malformed and missing signatures rejected (0.13975ms)
+✔ algorithm substitution rejected (0.108625ms)
+✔ unknown field rejected (0.085ms)
+✔ field order does not change verification (0.287084ms)
+✔ Unicode round trip accepted; modifications rejected (0.932459ms)
+✔ signature verification alone allows replay (documented boundary) (0.43575ms)
+ℹ tests 14
+ℹ suites 0
+ℹ pass 14
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 81.003125

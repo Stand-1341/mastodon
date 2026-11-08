@@ -1,0 +1,6 @@
+Sample output is simulated; no AI service or Mastodon account is contacted.
+Original message accepted: true
+Changed message accepted: false
+Wrong key accepted: false
+Signature bytes: 4627
+Keys stay in memory. A valid signature does not prove the content is true.
