@@ -22,6 +22,13 @@ vi.mock('@/mastodon/hooks/useAccount', () => ({
 }));
 
 vi.mock('@/mastodon/store', () => ({
+  createAppSelector:
+    (
+      selectors: ((state: unknown) => unknown)[],
+      combiner: (...values: unknown[]) => unknown,
+    ) =>
+    (state: unknown) =>
+      combiner(...selectors.map((selector) => selector(state))),
   useAppSelector: vi.fn(),
   useAppDispatch: () => vi.fn(),
 }));
@@ -141,14 +148,13 @@ describe('<AccountBadges /> post-quantum badge', () => {
   });
 
   it('does not show the badge when the flag is missing from the payload', () => {
-    // A stale or partial API payload can omit `pqc_signed` entirely, so a
-    // missing value has to behave like `false` rather than throwing.
+    // The account model defaults this field to false when a payload omits it.
     const account = accountFactoryImmutable({ id: accountId }).set(
       'pqc_signed',
       undefined as unknown as boolean,
     );
 
-    expect(account.pqc_signed).toBeUndefined();
+    expect(account.pqc_signed).toBe(false);
 
     mountAccountBadges(account);
 

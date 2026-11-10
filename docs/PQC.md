@@ -237,13 +237,18 @@ explain browser startup or full page-load delays.
 ## Private media encryption
 
 An opt-in owner-only private-media API is available separately from regular
-ActivityPub attachments. It uses AES-256-GCM with a fresh 256-bit data key per
-object, authenticated object/account context, and a wrapped data key. Only the
-owning account can download or delete an object through the authenticated API;
-downloads are `application/octet-stream` with `no-store` and `nosniff`. Objects
-are limited to 32 MB. Public media, thumbnails, federation, and ordinary status
-attachments are unchanged. The application server and authorized owner account
-can decrypt this content, so this is at-rest encryption rather than E2EE.
+ActivityPub attachments. The browser encrypts file bytes with AES-256-GCM and a
+fresh 256-bit data key, then wraps that key to the uploader device's ML-KEM-1024
+public key. The server stores ciphertext and the device-bound key envelope; it
+cannot unwrap the browser's media key. Only the owning account can download or
+delete an object through the authenticated API. Downloads are ciphertext with
+`application/octet-stream`, `no-store`, and `nosniff`; authorized browsers decrypt
+after retrieving the envelope. Objects are limited to 32 MiB. Public media,
+thumbnails, federation, and ordinary status attachments are unchanged. This
+private-media path is client-side encryption to one device, not group sharing:
+keep that device's encrypted recovery record and passphrase to retain access.
+The server-side KMS data-key provider is used by the legacy at-rest private
+media path, not to encrypt browser-submitted ciphertext.
 
 The local Docker setup enables `PQC_PRIVATE_MEDIA_ENCRYPTION=true` and creates a
 random development-only wrapping key in the ignored `.env.development.local`.
@@ -303,9 +308,16 @@ curl -H "Authorization: Bearer $TOKEN" \
 ```
 
 The record is not a normal status attachment and is not shared with followers
-or other recipients. The uploader's device does not perform client-side
-encryption. ML-KEM is not used as a file cipher; recipient key distribution is
-part of the deferred messaging design.
+or other recipients. Uploads from the `/pqc` private-media panel are encrypted
+in the browser before upload. AES-GCM encrypts the file; ML-KEM-1024 derives a
+one-device wrapping key for the random AES data key. The envelope can be attached
+once to the object and is accepted only for an active registered device belonging
+to the owner. The object ID can be entered on another session of the same device
+after restoring its encrypted recovery record. Other devices cannot decrypt it,
+and device rotation does not automatically rewrap old media. The older direct
+`POST /api/v1/private_media` flow without a client envelope remains a distinct
+server-side at-rest-encrypted upload; it does not provide end-to-end secrecy from
+the server.
 
 ## MLS encrypted messaging
 

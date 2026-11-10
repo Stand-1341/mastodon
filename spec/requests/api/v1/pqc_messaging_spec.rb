@@ -26,16 +26,17 @@ RSpec.describe 'PQC messaging relay API' do
 
     let!(:conversation_id) { create_conversation }
 
-    def register_device
+    def register_device(media_kem_public_key: 'k'.b * 1568, expected_status: 201, device_id: 'browser-device-1')
       auth_public_key = '0'.b * Pqc::Messaging::DeviceRequestAuthenticator::PUBLIC_KEY_BYTES
       post '/api/v1/pqc_devices', headers: headers, params: {
-        device_id: 'browser-device-1',
+        device_id:,
         fingerprint: Digest::SHA256.hexdigest(auth_public_key),
         device_auth_public_key: Base64.strict_encode64(auth_public_key),
+        media_kem_public_key: Base64.strict_encode64(media_kem_public_key),
         key_package: Base64.strict_encode64(key_package),
       }
-      expect(response).to have_http_status(201), response.body
-      response.parsed_body.fetch('id')
+      expect(response).to have_http_status(expected_status), response.body
+      response.parsed_body.fetch('id') if expected_status == 201
     end
 
     def create_conversation
@@ -72,6 +73,14 @@ RSpec.describe 'PQC messaging relay API' do
 
       expect(binding).to include('ciphersuite_id' => '0xf011', 'version' => 1)
       expect(OpenSSL::PKey.read(key.public_key).verify(nil, Base64.urlsafe_decode64(binding.fetch('signature').delete_prefix('u')), message)).to be true
+    end
+
+    it 'rejects a media public key with the wrong size' do
+      register_device(media_kem_public_key: 'short', expected_status: 422, device_id: 'invalid-media-device')
+
+      expect(response).to have_http_status(422)
+      expect(response.parsed_body.fetch('error')).to include('1568 bytes')
+      expect(PqcDevice.exists?(device_id: 'invalid-media-device')).to be(false)
     end
 
     it 'makes a KeyPackage available once per authorized conversation member' do
@@ -963,7 +972,6 @@ RSpec.describe 'PQC messaging relay API' do
       post "/api/v1/pqc_conversations/#{conversation_id}/messages", headers: headers, params: params.merge(ciphertext: Base64.strict_encode64('different payload'))
       expect(response).to have_http_status(409)
     end
-
   end
 
   def create_conversation(account_id)
@@ -986,7 +994,7 @@ RSpec.describe 'PQC messaging relay API' do
 
   def create_test_device(account)
     auth_public_key = '0'.b * Pqc::Messaging::DeviceRequestAuthenticator::PUBLIC_KEY_BYTES
-    PqcDevice.create!(account:, device_id: SecureRandom.uuid, fingerprint: Digest::SHA256.hexdigest(auth_public_key), auth_public_key:, key_package: 'test-package'.b)
+    PqcDevice.create!(account:, device_id: SecureRandom.uuid, fingerprint: Digest::SHA256.hexdigest(auth_public_key), auth_public_key:, key_package: 'test-package'.b, media_kem_public_key: 'k'.b * 1568)
   end
 
   def invite_and_accept_member(conversation_id, participant)

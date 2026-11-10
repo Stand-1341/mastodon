@@ -89,6 +89,37 @@ RSpec.describe Pqc::PrivateMedia::CreateService do
       .to raise_error(described_class::InvalidUploadError)
   end
 
+  it 'rejects encrypted uploads above the 32 MiB media limit' do
+    encrypted_upload = uploaded_file('x' * (described_class::MAX_FILE_SIZE + Pqc::PrivateMedia::DeviceKeyEnvelope::TAG_BYTES))
+
+    expect { described_class.new.call(account, encrypted_upload, token: SecureRandom.uuid) }
+      .to raise_error(described_class::InvalidUploadError)
+    expect(PrivateMediaObject.count).to eq(0)
+  end
+
+  it 'uses a caller-supplied UUID as the authenticated object token' do
+    token = SecureRandom.uuid.upcase
+    object = described_class.new.call(account, uploaded_file(plaintext), token:)
+
+    expect(object.token).to eq(token.downcase)
+    expect(Pqc::PrivateMedia::DecryptService.new.call(object)).to eq(plaintext)
+
+    expect { described_class.new.call(account, uploaded_file(plaintext), token:) }
+      .to raise_error(described_class::InvalidUploadError, /already been used/)
+  end
+
+  it 'rejects a malformed caller-supplied object token' do
+    expect { described_class.new.call(account, uploaded_file(plaintext), token: 'not-a-uuid') }
+      .to raise_error(described_class::InvalidUploadError, /valid private media token/)
+  end
+
+  it 'rejects empty or whitespace caller-supplied object tokens' do
+    ['', '  '].each do |token|
+      expect { described_class.new.call(account, uploaded_file(plaintext), token:) }
+        .to raise_error(described_class::InvalidUploadError, /valid private media token/)
+    end
+  end
+
   it 'enforces the per-account storage quota at the exact byte limit' do
     filler_token = SecureRandom.uuid
     account.private_media_objects.create!(

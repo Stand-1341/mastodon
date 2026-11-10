@@ -7,9 +7,12 @@ class Pqc::PrivateMedia::CreateService < BaseService
   class InvalidUploadError < StandardError; end
   class QuotaExceededError < InvalidUploadError; end
 
-  def call(account, upload)
+  def call(account, upload, token: nil)
     plaintext = data_key = ciphertext = storage = object = nil
 
+    raise InvalidUploadError, 'A valid private media token is required' unless token.nil? || (token.is_a?(String) && token.match?(/\A[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\z/i))
+
+    token = token.downcase if token
     raise InvalidUploadError, 'A file is required' if upload.blank? || !upload.respond_to?(:read)
     raise InvalidUploadError, "Private media files must be at most #{MAX_FILE_SIZE / 1.megabyte} MB" if upload.size.to_i <= 0 || upload.size.to_i > MAX_FILE_SIZE
 
@@ -18,15 +21,18 @@ class Pqc::PrivateMedia::CreateService < BaseService
     # a local tempfile, but callers and alternate upload adapters can report a
     # smaller size than the bytes they return.
     plaintext = upload.read(MAX_FILE_SIZE + 1)
+
     raise InvalidUploadError, "Private media files must be at most #{MAX_FILE_SIZE / 1.megabyte} MB" if plaintext.bytesize > MAX_FILE_SIZE
     raise InvalidUploadError, 'A file is required' if plaintext.empty?
 
     storage = Pqc::PrivateMedia::Storage.new
     account.with_lock do
+      raise InvalidUploadError, 'This private media token has already been used' if token.present? && PrivateMediaObject.exists?(token:)
+
       used_storage = account.private_media_objects.sum(:byte_size)
       raise QuotaExceededError, "Private media storage is limited to #{MAX_ACCOUNT_STORAGE / 1.gigabyte} GB per account" if used_storage + plaintext.bytesize > MAX_ACCOUNT_STORAGE
 
-      token = SecureRandom.uuid
+      token ||= SecureRandom.uuid
       context = { 'object_token' => token, 'account_id' => account.id.to_s }
       data_key, wrapped_key, provider = Pqc::PrivateMedia::DataKey.generate(context)
       cipher = OpenSSL::Cipher.new('aes-256-gcm').encrypt
@@ -45,7 +51,10 @@ class Pqc::PrivateMedia::CreateService < BaseService
         wrapped_key: wrapped_key,
         key_encryption_provider: provider,
         nonce: Base64.strict_encode64(nonce),
-        auth_tag: Base64.strict_encode64(cipher.auth_tag)
+        auth_tag: Base64.strict_encode64(cipher.auth_tag),
+        client_nonce: nil,
+        client_auth_tag: nil,
+        device_key_envelopes: nil
       )
       storage.write(object.storage_key, ciphertext)
       object

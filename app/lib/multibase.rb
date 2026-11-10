@@ -30,7 +30,13 @@ class Multibase
 
     case string[0]
     when 'u'
-      Base64.urlsafe_decode64(string[1...])
+      encoded = string[1...]
+      raise Error, 'Non-canonical base64url encoding' unless encoded.match?(/\A[A-Za-z0-9_-]*\z/)
+
+      decoded = Base64.urlsafe_decode64(encoded)
+      raise Error, 'Non-canonical base64url encoding' unless "u#{Base64.urlsafe_encode64(decoded, padding: false)}" == string
+
+      decoded
     when 'z'
       Base58.base58_to_binary(string[1...], :bitcoin)
     else
@@ -42,6 +48,13 @@ class Multibase
 
   def self.decode_multicodec(string)
     binary = decode(string)
+    prefixes = MULTICODEC_PREFIXES.values
+    prefixes.sort_by { |prefix| -prefix.bytesize }.each do |prefix|
+      next unless binary.start_with?(prefix.byteslice(0, binary.bytesize))
+      next unless binary.bytesize < prefix.bytesize
+
+      raise Error, 'Truncated Multicodec prefix'
+    end
 
     MULTICODEC_PREFIXES.each do |tag, prefix|
       return [tag, binary[prefix.length..]] if binary.starts_with?(prefix)
@@ -87,7 +100,8 @@ class Multibase
       raise Error, 'Invalid data size for mldsa-87-pub' unless binary.size == 2592
 
       der = ML_DSA_87_PUB_DER_HEADER + binary
-      [:'ml-dsa-87', "-----BEGIN PUBLIC KEY-----\n#{Base64.strict_encode64(der).scan(/.{,64}/).join("\n")}-----END PUBLIC KEY-----\n"]
+      encoded = Base64.strict_encode64(der).scan(/.{1,64}/).join("\n")
+      [:'ml-dsa-87', "-----BEGIN PUBLIC KEY-----\n#{encoded}\n-----END PUBLIC KEY-----\n"]
     else
       raise Error, 'Unsupported key type'
     end

@@ -36,6 +36,7 @@ class PqcDevice < ApplicationRecord
   validates :fingerprint, presence: true, format: { with: /\A[0-9a-f]{64}\z/ }
   validates :auth_fingerprint, format: { with: /\A[0-9a-f]{64}\z/ }, allow_nil: true
   validates :key_package, presence: true, length: { maximum: 512.kilobytes }
+  validates :media_kem_public_key, length: { is: 1568 }, allow_nil: true
   validates :device_id, uniqueness: true
 
   scope :active, -> { where(revoked_at: nil, revocation_pending_at: nil) }

@@ -1,4 +1,5 @@
 import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
+import { ml_kem1024 } from '@noble/post-quantum/ml-kem.js';
 import {
   clientStateDecoder,
   clientStateEncoder,
@@ -35,6 +36,8 @@ export const PQC_MLS_CIPHERSUITE_ID = 0xf011;
 export interface PqcDeviceKeyPackage {
   identity: string;
   fingerprint: string;
+  mediaKemPublicKey: Uint8Array;
+  mediaKemPrivateKey?: Uint8Array;
   publicPackage: Uint8Array;
   keyPackageMessage: Uint8Array;
   privatePackage: Uint8Array;
@@ -85,33 +88,48 @@ export const generatePqcDeviceKeyPackage = async (
 ): Promise<PqcDeviceKeyPackage> => {
   const impl = await getPqcMlsCiphersuite(cipherSuiteId);
   const signatureKeyPair = await generateSignatureKeyPair(impl);
-  // MLS membership and device API requests use this one ML-DSA identity.
-  const fingerprint = await fingerprintPublicKey(signatureKeyPair.publicKey);
-  const identity = `${actorUri}\n${deviceId}\n${fingerprint}`;
-  const credential: Credential = {
-    credentialType: defaultCredentialTypes.basic,
-    identity: encoder.encode(identity),
-  };
+  const mediaKemKeyPair = ml_kem1024.keygen();
+  const mediaKemPublicKey = Uint8Array.from(mediaKemKeyPair.publicKey);
+  const mediaKemPrivateKey = Uint8Array.from(mediaKemKeyPair.secretKey);
+  zeroOutUint8Array(mediaKemKeyPair.secretKey);
+  try {
+    // MLS membership and device API requests use this one ML-DSA identity.
+    const fingerprint = await fingerprintPublicKey(signatureKeyPair.publicKey);
+    const identity = `${actorUri}\n${deviceId}\n${fingerprint}`;
+    const credential: Credential = {
+      credentialType: defaultCredentialTypes.basic,
+      identity: encoder.encode(identity),
+    };
 
-  const result = await generateKeyPackageWithKey({
-    credential,
-    signatureKeyPair,
-    cipherSuite: impl,
-  });
+    const result = await generateKeyPackageWithKey({
+      credential,
+      signatureKeyPair,
+      cipherSuite: impl,
+    });
 
-  const encodedPublicPackage = encode(keyPackageEncoder, result.publicPackage);
+    const encodedPublicPackage = encode(
+      keyPackageEncoder,
+      result.publicPackage,
+    );
 
-  return {
-    identity,
-    fingerprint,
-    publicPackage: encodedPublicPackage,
-    keyPackageMessage: encode(mlsMessageEncoder, {
-      wireformat: wireformats.mls_key_package,
-      keyPackage: result.publicPackage,
-      version: protocolVersions.mls10,
-    }),
-    privatePackage: encode(privateKeyPackageEncoder, result.privatePackage),
-  };
+    return {
+      identity,
+      fingerprint,
+      mediaKemPublicKey,
+      mediaKemPrivateKey,
+      publicPackage: encodedPublicPackage,
+      keyPackageMessage: encode(mlsMessageEncoder, {
+        wireformat: wireformats.mls_key_package,
+        keyPackage: result.publicPackage,
+        version: protocolVersions.mls10,
+      }),
+      privatePackage: encode(privateKeyPackageEncoder, result.privatePackage),
+    };
+  } catch (error) {
+    zeroOutUint8Array(mediaKemKeyPair.secretKey);
+    zeroOutUint8Array(mediaKemPrivateKey);
+    throw error;
+  }
 };
 
 export const pqcDeviceAuthPublicKey = (
@@ -162,6 +180,10 @@ export const rotatePqcDeviceKeyPackage = async (
     return {
       identity: keyPackage.identity,
       fingerprint: keyPackage.fingerprint,
+      mediaKemPublicKey: Uint8Array.from(keyPackage.mediaKemPublicKey),
+      mediaKemPrivateKey: keyPackage.mediaKemPrivateKey
+        ? Uint8Array.from(keyPackage.mediaKemPrivateKey)
+        : undefined,
       publicPackage: encodedPublicPackage,
       keyPackageMessage: encode(mlsMessageEncoder, {
         wireformat: wireformats.mls_key_package,

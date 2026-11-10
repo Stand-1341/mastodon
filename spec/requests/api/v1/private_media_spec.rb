@@ -74,6 +74,231 @@ RSpec.describe 'Private media API' do
     end
   end
 
+  describe 'private media envelope API' do
+    let(:media_public_key) { 'p'.b * 1568 }
+    let(:device) do
+      PqcDevice.create!(
+        account: user.account,
+        device_id: 'private-media-device',
+        fingerprint: 'a' * 64,
+        media_kem_public_key: media_public_key,
+        key_package: 'test-key-package'.b
+      )
+    end
+
+    def upload_private_media(token:, ciphertext:)
+      Tempfile.create(['private-media', '.bin']) do |tempfile|
+        tempfile.binmode
+        tempfile.write(ciphertext)
+        tempfile.rewind
+        post '/api/v1/private_media', headers: headers, params: {
+          token:,
+          file: Rack::Test::UploadedFile.new(tempfile.path, 'application/octet-stream', true, original_filename: 'private-media.bin'),
+        }
+      end
+
+      expect(response).to have_http_status(201), response.body
+      response.parsed_body.fetch('id')
+    end
+
+    def expect_private_media_round_trip(object_id:, ciphertext:, token:, nonce:, auth_tag:, envelope:)
+      object = user.account.private_media_objects.find(object_id)
+      expect(Pqc::PrivateMedia::Storage.new.read(object.storage_key)).to_not eq(ciphertext)
+      get "/api/v1/private_media/#{object_id}/envelope", headers: headers
+      expect(response).to have_http_status(200)
+      expect(response.parsed_body).to include(
+        'token' => token,
+        'nonce' => nonce,
+        'auth_tag' => auth_tag,
+        'envelopes' => [envelope.stringify_keys]
+      )
+      get "/api/v1/private_media/#{object_id}", headers: headers
+      expect(response).to have_http_status(200)
+      expect(response.body.b).to eq(ciphertext)
+      expect(response.headers['Cache-Control']).to include('no-store')
+    end
+
+    it 'stores browser-encrypted bytes with a device envelope and round-trips ciphertext unchanged' do
+      device
+      token = SecureRandom.uuid
+      ciphertext = 'browser-encrypted-bytes'.b
+      nonce = Base64.strict_encode64('n' * 12)
+      auth_tag = Base64.strict_encode64('t' * 16)
+      kem_ciphertext = 'c'.b * Pqc::PrivateMedia::DeviceKeyEnvelope::CIPHERTEXT_BYTES
+      wrapped_key = Base64.strict_encode64(('w' * Pqc::PrivateMedia::DeviceKeyEnvelope::WRAPPED_KEY_BYTES).b)
+      envelope = {
+        device_id: device.device_id,
+        kem_ciphertext: Base64.strict_encode64(kem_ciphertext),
+        wrapped_key:,
+      }
+      object_id = upload_private_media(token:, ciphertext:)
+      post "/api/v1/private_media/#{object_id}/envelope", headers: headers, params: {
+        token:,
+        nonce:,
+        auth_tag:,
+        envelope:,
+      }
+
+      expect(response).to have_http_status(201), response.body
+      expect_private_media_round_trip(object_id:, ciphertext:, token:, nonce:, auth_tag:, envelope:)
+    end
+
+    it 'returns a controlled error when stored envelope metadata is malformed' do
+      device
+      object = Pqc::PrivateMedia::CreateService.new.call(
+        user.account,
+        fixture_file_upload('attachment.jpg', 'image/jpeg'),
+        token: SecureRandom.uuid
+      )
+      object.update_column(:device_key_envelopes, 'not-json')
+
+      get "/api/v1/private_media/#{object.id}", headers: headers
+
+      expect(response).to have_http_status(503)
+      expect(response.parsed_body).to include('error' => 'Private media is temporarily unavailable')
+    end
+
+    it 'prevents another account from attaching an envelope to the media object' do
+      device
+      token = SecureRandom.uuid
+      object = Pqc::PrivateMedia::CreateService.new.call(
+        user.account,
+        fixture_file_upload('attachment.jpg', 'image/jpeg'),
+        token:
+      )
+      other_user = Fabricate(:user)
+      other_token = Fabricate(:accessible_access_token, resource_owner_id: other_user.id, scopes: 'write:media')
+      other_headers = { 'Authorization' => "Bearer #{other_token.token}" }
+
+      post "/api/v1/private_media/#{object.id}/envelope", headers: other_headers, params: {
+        token:,
+        nonce: Base64.strict_encode64('n' * 12),
+        auth_tag: Base64.strict_encode64('t' * 16),
+        envelope: {
+          device_id: device.device_id,
+          kem_ciphertext: Base64.strict_encode64('c' * Pqc::PrivateMedia::DeviceKeyEnvelope::CIPHERTEXT_BYTES),
+          wrapped_key: Base64.strict_encode64('w' * Pqc::PrivateMedia::DeviceKeyEnvelope::WRAPPED_KEY_BYTES),
+        },
+      }
+
+      expect(response).to have_http_status(404)
+      expect(object.reload.device_key_envelopes).to be_nil
+    end
+
+    it 'rejects a device envelope with invalid ciphertext or an unregistered device' do
+      device
+      object = Pqc::PrivateMedia::CreateService.new.call(
+        user.account,
+        fixture_file_upload('attachment.jpg', 'image/jpeg'),
+        token: SecureRandom.uuid
+      )
+      params = {
+        token: object.token,
+        nonce: Base64.strict_encode64('n' * 12),
+        auth_tag: Base64.strict_encode64('t' * 16),
+        envelope: { device_id: 'unknown', kem_ciphertext: Base64.strict_encode64('bad'), wrapped_key: Base64.strict_encode64('w' * 60) },
+      }
+
+      post "/api/v1/private_media/#{object.id}/envelope", headers: headers, params: params
+
+      expect(response).to have_http_status(422)
+      expect(object.reload.device_key_envelopes).to be_nil
+    end
+
+    it 'rejects malformed envelope values without writing envelope fields' do
+      device
+      object = Pqc::PrivateMedia::CreateService.new.call(
+        user.account,
+        fixture_file_upload('attachment.jpg', 'image/jpeg'),
+        token: SecureRandom.uuid
+      )
+
+      post "/api/v1/private_media/#{object.id}/envelope", headers: headers, params: {
+        token: object.token,
+        nonce: Base64.strict_encode64('n' * 12),
+        auth_tag: Base64.strict_encode64('t' * 16),
+        envelope: {
+          device_id: device.device_id,
+          kem_ciphertext: nil,
+          wrapped_key: Base64.strict_encode64('w' * Pqc::PrivateMedia::DeviceKeyEnvelope::WRAPPED_KEY_BYTES),
+        },
+      }
+
+      expect(response).to have_http_status(422)
+      expect(object.reload).to have_attributes(client_nonce: nil, client_auth_tag: nil, device_key_envelopes: nil)
+    end
+
+    it 'rejects malformed envelope metadata without writing envelope fields' do
+      device
+      object = Pqc::PrivateMedia::CreateService.new.call(
+        user.account,
+        fixture_file_upload('attachment.jpg', 'image/jpeg'),
+        token: SecureRandom.uuid
+      )
+      envelope = {
+        device_id: device.device_id,
+        kem_ciphertext: Base64.strict_encode64('c' * Pqc::PrivateMedia::DeviceKeyEnvelope::CIPHERTEXT_BYTES),
+        wrapped_key: Base64.strict_encode64('w' * Pqc::PrivateMedia::DeviceKeyEnvelope::WRAPPED_KEY_BYTES),
+      }
+
+      post "/api/v1/private_media/#{object.id}/envelope", headers: headers, params: {
+        token: object.token,
+        nonce: 'invalid-base64',
+        auth_tag: Base64.strict_encode64('t' * 16),
+        envelope:,
+      }
+
+      expect(response).to have_http_status(422)
+      expect(object.reload).to have_attributes(client_nonce: nil, client_auth_tag: nil, device_key_envelopes: nil)
+    end
+
+    it 'rejects an envelope parameter that is not an object' do
+      device
+      object = Pqc::PrivateMedia::CreateService.new.call(
+        user.account,
+        fixture_file_upload('attachment.jpg', 'image/jpeg'),
+        token: SecureRandom.uuid
+      )
+
+      post "/api/v1/private_media/#{object.id}/envelope", headers: headers, params: {
+        token: object.token,
+        nonce: Base64.strict_encode64('n' * 12),
+        auth_tag: Base64.strict_encode64('t' * 16),
+        envelope: 'not-an-object',
+      }
+
+      expect(response).to have_http_status(422)
+      expect(object.reload).to have_attributes(client_nonce: nil, client_auth_tag: nil, device_key_envelopes: nil)
+    end
+
+    it 'does not permit replacing an already attached device envelope' do
+      device
+      object = Pqc::PrivateMedia::CreateService.new.call(
+        user.account,
+        fixture_file_upload('attachment.jpg', 'image/jpeg'),
+        token: SecureRandom.uuid
+      )
+      params = {
+        token: object.token,
+        nonce: Base64.strict_encode64('n' * 12),
+        auth_tag: Base64.strict_encode64('t' * 16),
+        envelope: {
+          device_id: device.device_id,
+          kem_ciphertext: Base64.strict_encode64('c' * Pqc::PrivateMedia::DeviceKeyEnvelope::CIPHERTEXT_BYTES),
+          wrapped_key: Base64.strict_encode64('w' * Pqc::PrivateMedia::DeviceKeyEnvelope::WRAPPED_KEY_BYTES),
+        },
+      }
+      post "/api/v1/private_media/#{object.id}/envelope", headers: headers, params: params
+
+      expect(response).to have_http_status(201)
+      attached = object.reload.device_key_envelopes
+      post "/api/v1/private_media/#{object.id}/envelope", headers: headers, params: params
+
+      expect(response).to have_http_status(422)
+      expect(object.reload.device_key_envelopes).to eq(attached)
+    end
+  end
+
   describe 'DELETE /api/v1/private_media/:id' do
     it 'removes the encrypted object and its database record' do
       object = Pqc::PrivateMedia::CreateService.new.call(user.account, fixture_file_upload('attachment.jpg', 'image/jpeg'))
