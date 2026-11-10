@@ -26,7 +26,6 @@ import { expandHomeTimeline } from '../../actions/timelines';
 import StatusListContainer from '../ui/containers/status_list_container';
 
 import { ColumnSettings } from './components/column_settings';
-import { CriticalUpdateBanner } from './components/critical_update_banner';
 import { AnnualReportTimeline } from '../annual_report/timeline';
 import { isRedesignEnabled } from '@/mastodon/utils/environment';
 import { ColumnHeader } from '@/mastodon/components/column_header';
@@ -127,10 +126,7 @@ class HomeTimeline extends PureComponent {
     const { intl, hasUnread, columnId, multiColumn, hasAnnouncements, unreadAnnouncements, showAnnouncements, matchesBreakpoint } = this.props;
     const pinned = !!columnId;
     const { signedIn } = this.props.identity;
-    const banners = [
-      <CriticalUpdateBanner key='critical-update-banner' />,
-      <AnnualReportTimeline key='annual-report' />
-    ];
+    const banners = [<AnnualReportTimeline key='annual-report' />];
 
     let announcementsButton;
 
