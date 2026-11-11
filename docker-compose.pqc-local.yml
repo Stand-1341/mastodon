@@ -1,0 +1,241 @@
+# Local, zero-ceremony PQC demo stack.
+#
+#   docker compose -f docker-compose.pqc-local.yml up -d --build
+#
+# There is nothing to generate first: no ./secrets directory, no TLS
+# certificates, no .env file. Every value below has a working default.
+#
+# SECURITY: this file is for a laptop demo only. The secrets are public,
+# fixed constants, PostgreSQL uses trust authentication, and Caddy serves a
+# self-signed local certificate. Everything binds to 127.0.0.1. Do not expose
+# this stack to a network and do not reuse these values anywhere else.
+#
+# The production PostgreSQL hybrid-TLS overlay is a separate file
+# (docker-compose.pqc.yml) and is intentionally not modified by this one.
+
+name: mastodon-pqc-local
+
+x-app-image: &app-image
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: mastodon-pqc-local:latest
+
+x-app-environment: &app-environment
+  RAILS_ENV: production
+  NODE_ENV: production
+  LOCAL_DOMAIN: ${LOCAL_DOMAIN:-localhost:3000}
+  # Rails host authorization must accept the request host with or without the
+  # port, depending on how the proxy forwards it.
+  ALTERNATE_DOMAINS: ${ALTERNATE_DOMAINS:-localhost}
+  RAILS_LOG_LEVEL: ${RAILS_LOG_LEVEL:-info}
+
+  # Database. DB_SSLMODE is required: config/database.yml defaults to
+  # "require" in production, and this local PostgreSQL has no TLS.
+  DB_HOST: db
+  DB_PORT: "5432"
+  DB_NAME: ${DB_NAME:-mastodon_production}
+  DB_USER: ${DB_USER:-mastodon}
+  DB_PASS: ${DB_PASS:-mastodon}
+  DB_SSLMODE: "disable"
+
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+
+  # Demo-only constants. They must stay stable across restarts or existing
+  # accounts, sessions and encrypted ML-DSA private keys become unreadable.
+  SECRET_KEY_BASE: ${SECRET_KEY_BASE:-7c1f9a2e5b8d4f6a0c3e7b1d9f2a5c8e4b7d0f3a6c9e2b5d8f1a4c7e0b3d6f92}
+  ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY: ${ACTIVE_RECORD_ENCRYPTION_PRIMARY_KEY:-0123456789abcdef0123456789abcdef}
+  ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY: ${ACTIVE_RECORD_ENCRYPTION_DETERMINISTIC_KEY:-fedcba9876543210fedcba9876543210}
+  ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT: ${ACTIVE_RECORD_ENCRYPTION_KEY_DERIVATION_SALT:-00112233445566778899aabbccddeeff}
+
+  # Turn the PQC signing path on by default. The app treats an absent value as
+  # enabled; setting true makes that explicit for the doctor output.
+  PQC_ACTIVITYPUB_SIGNING: ${PQC_ACTIVITYPUB_SIGNING:-true}
+  PQC_ACTIVITYPUB_REQUIRE_PROOF: ${PQC_ACTIVITYPUB_REQUIRE_PROOF:-false}
+  PQC_PRIVATE_MEDIA_ENCRYPTION: ${PQC_PRIVATE_MEDIA_ENCRYPTION:-false}
+
+services:
+  db:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    restart: unless-stopped
+    shm_size: 256mb
+    environment:
+      POSTGRES_USER: ${DB_USER:-mastodon}
+      POSTGRES_DB: ${DB_NAME:-mastodon_production}
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - pqc_local
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - pqc_local
+
+  # One-shot: create/migrate the schema and load the default roles. web and
+  # sidekiq wait for this to exit successfully.
+  migrate:
+    <<: *app-image
+    command: ['sh', '-c', 'bundle exec rails db:prepare && bundle exec rails db:seed']
+    environment: *app-environment
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: 'no'
+    networks:
+      - pqc_local
+
+  web:
+    <<: *app-image
+    command: ['bundle', 'exec', 'puma', '-C', 'config/puma.rb']
+    environment:
+      <<: *app-environment
+      PORT: '3001'
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-1}
+      MAX_THREADS: ${MAX_THREADS:-5}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - mastodon_system:/opt/mastodon/public/system
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS --noproxy localhost http://localhost:3001/health | grep -q OK']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - pqc_local
+
+  sidekiq:
+    <<: *app-image
+    command: ['bundle', 'exec', 'sidekiq']
+    environment:
+      <<: *app-environment
+      SIDEKIQ_CONCURRENCY: ${SIDEKIQ_CONCURRENCY:-3}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - mastodon_system:/opt/mastodon/public/system
+    healthcheck:
+      test: ['CMD-SHELL', "ps aux | grep '[s]idekiq' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - pqc_local
+
+  streaming:
+    build:
+      context: .
+      dockerfile: streaming/Dockerfile
+    image: mastodon-pqc-local-streaming:latest
+    command: ['node', './streaming/index.js']
+    environment:
+      NODE_ENV: production
+      PORT: '4000'
+      BIND: 0.0.0.0
+      LOCAL_DOMAIN: ${LOCAL_DOMAIN:-localhost:3000}
+      DB_HOST: db
+      DB_PORT: '5432'
+      DB_NAME: ${DB_NAME:-mastodon_production}
+      DB_USER: ${DB_USER:-mastodon}
+      DB_PASS: ${DB_PASS:-mastodon}
+      DB_SSLMODE: 'disable'
+      REDIS_HOST: redis
+      REDIS_PORT: '6379'
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS --noproxy localhost http://localhost:4000/api/v1/streaming/health | grep -q OK']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - pqc_local
+
+  # Mastodon's production environment forces HTTPS (config.force_ssl = true),
+  # so a TLS terminator is not optional even on localhost. Caddy creates its
+  # own local CA, which keeps this file free of certificate files.
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        cat > /config/Caddyfile <<'CADDY'
+        {
+          auto_https disable_redirects
+        }
+
+        https://localhost:3000 {
+          tls internal
+
+          handle /api/v1/streaming* {
+            reverse_proxy streaming:4000
+          }
+
+          handle {
+            reverse_proxy web:3001
+          }
+        }
+        CADDY
+        exec caddy run --config /config/Caddyfile --adapter caddyfile
+    ports:
+      - '127.0.0.1:3000:3000'
+    volumes:
+      - caddy_data:/data
+    depends_on:
+      web:
+        condition: service_healthy
+      streaming:
+        condition: service_healthy
+    networks:
+      - pqc_local
+
+volumes:
+  postgres_data:
+  redis_data:
+  mastodon_system:
+  caddy_data:
+
+networks:
+  pqc_local:
+    driver: bridge

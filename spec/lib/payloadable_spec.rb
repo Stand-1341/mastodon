@@ -18,10 +18,24 @@ RSpec.describe Payloadable do
     ClimateControl.modify(AUTHORIZED_FETCH: 'false') { example.run }
   end
 
-  it 'keeps existing RSA signing by default' do
-    ClimateControl.modify PQC_ACTIVITYPUB_SIGNING: nil do
+  it 'keeps RSA-only signing when PQC signing is explicitly disabled' do
+    ClimateControl.modify PQC_ACTIVITYPUB_SIGNING: 'false' do
       expect(payload['signature']['type']).to eq('RsaSignature2017')
       expect(payload).to_not have_key('proof')
+    end
+  end
+
+  it 'adds a proof by default when the flag is unset and a usable key is present' do
+    generate_real_ml_dsa_87_key
+    ActivityPub::GeneratePqcKeyService.new.call(account)
+    key = account.keypair(type: :'ml-dsa-87')
+
+    ClimateControl.modify PQC_ACTIVITYPUB_SIGNING: nil do
+      secured = payload
+
+      expect(secured['signature']['type']).to eq('RsaSignature2017')
+      expect(secured['proof']['cryptosuite']).to eq('mldsa87-jcs-2024')
+      expect(ActivityPub::ObjectIntegrityProof.verify_mldsa_jcs_profile(secured.without('signature'), OpenSSL::PKey.read(key.public_key))).to be true
     end
   end
 

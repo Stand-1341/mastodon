@@ -7,6 +7,7 @@ import { Link } from 'react-router-dom';
 
 import { Avatar } from '@/mastodon/components/avatar';
 import { AvatarOverlay } from '@/mastodon/components/avatar_overlay';
+import { PqcBadge } from '@/mastodon/components/badge';
 import type { DisplayNameProps } from '@/mastodon/components/display_name';
 import { LinkedDisplayName } from '@/mastodon/components/display_name';
 import { RelativeTimestamp } from '@/mastodon/components/relative_timestamp';
@@ -63,6 +64,7 @@ export const StatusHeader: FC<StatusHeaderProps> = ({
         friendAccount={account}
         avatarSize={avatarSize}
       />
+      {statusAccount.pqc_signed && <PqcBadge compact />}
 
       {contentBeforeDate}
 

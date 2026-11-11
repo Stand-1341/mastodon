@@ -107,7 +107,12 @@ namespace :api, format: false do
     end
 
     resources :media, only: [:create, :update, :show, :destroy]
-    resources :private_media, only: [:create, :show, :destroy], controller: 'private_media'
+    resources :private_media, only: [:create, :show, :destroy], controller: 'private_media', param: :private_media_id do
+      member do
+        get :envelope, to: 'private_media/envelopes#show'
+        post :envelope, to: 'private_media/envelopes#create'
+      end
+    end
     resources :pqc_devices, only: [:index, :create, :destroy] do
       patch :key_package, on: :member, action: :update_key_package
       collection do

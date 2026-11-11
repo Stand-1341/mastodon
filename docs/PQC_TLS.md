@@ -1,5 +1,8 @@
 # PostgreSQL TLS certificate configuration
 
+This document is part of the fork's hobby-tier PQC work; see the
+[support tier](PQC.md#support-tier) note in `PQC.md` for what that means.
+
 Rails and streaming continue to require TLS by default for TCP database
 connections. The production default is **not** changed to `verify-full`: doing so
 without provisioning a trusted CA could break existing deployments. Conventional

@@ -82,6 +82,7 @@ export const accountFactoryAPI: FactoryFunction<ApiAccountJSON> = ({
   show_media_replies: true,
   mute_expires_at: null,
   note: 'This is a test user account.',
+  pqc_signed: false,
   statuses_count: 0,
   suspended: false,
   url: '/@testuser',

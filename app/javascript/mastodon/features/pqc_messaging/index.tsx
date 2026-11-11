@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FC, SyntheticEvent } from 'react';
 
+import { ml_kem1024 } from '@noble/post-quantum/ml-kem.js';
 import type { ClientState } from 'ts-mls';
 
 import { Column } from '@/mastodon/components/column';
@@ -35,6 +36,11 @@ import {
 } from './mls_client';
 import type { PqcDeviceKeyPackage, PqcMlsContext } from './mls_client';
 import {
+  decryptPqcPrivateMedia,
+  encryptPqcPrivateMedia,
+  PRIVATE_MEDIA_MAX_BYTES,
+} from './private_media';
+import {
   commitPqcConversationMember,
   acceptPqcConversationInvitation,
   completePqcGroupSetup,
@@ -45,6 +51,7 @@ import {
   fetchPqcActorUri,
   fetchPqcKeyPackages,
   fetchPqcMessages,
+  fetchPqcPrivateMedia,
   invitePqcConversationMember,
   listPqcConversations,
   listPqcDevices,
@@ -56,12 +63,12 @@ import {
   revokePqcDevice,
   sendPqcMessage,
   setPqcDeviceRequestSigner,
+  uploadPqcPrivateMedia,
 } from './relay_api';
 import type {
   PqcConversation,
   PqcDevice,
   PqcDeviceRequestSigner,
-  PqcDeviceRevocationResult,
   PqcKeyPackage,
   PqcPendingOutbound,
 } from './relay_api';
@@ -126,6 +133,8 @@ interface LocalRecoveryRecord {
     publicPackage: string;
     keyPackageMessage: string;
     privatePackage: string;
+    mediaKemPublicKey?: string;
+    mediaKemPrivateKey?: string;
   };
   activeConversations?: {
     conversation: PqcConversation;
@@ -154,6 +163,18 @@ interface LocalRecoveryRecord {
 
 const MAX_RECOVERED_MESSAGES = 100;
 
+const decodePqcBase64 = (encoded: string): Uint8Array => {
+  const binary = atob(encoded);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+};
+
+const encodePqcBase64 = (bytes: Uint8Array): string => {
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000)
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  return btoa(binary);
+};
+
 const restorePqcDeviceKeyPackage = async (
   savedDevice: LocalRecoveryRecord['device'],
 ): Promise<PqcDeviceKeyPackage> => {
@@ -173,6 +194,12 @@ const restorePqcDeviceKeyPackage = async (
     publicPackage: decodeBase64(savedDevice.publicPackage),
     keyPackageMessage: decodeBase64(savedDevice.keyPackageMessage),
     privatePackage: decodeBase64(savedDevice.privatePackage),
+    mediaKemPublicKey: savedDevice.mediaKemPublicKey
+      ? decodePqcBase64(savedDevice.mediaKemPublicKey)
+      : new Uint8Array(),
+    mediaKemPrivateKey: savedDevice.mediaKemPrivateKey
+      ? decodePqcBase64(savedDevice.mediaKemPrivateKey)
+      : undefined,
   };
 
   try {
@@ -185,9 +212,28 @@ const restorePqcDeviceKeyPackage = async (
       );
     }
 
+    if (keyPackage.mediaKemPrivateKey) {
+      const derivedMediaPublicKey = ml_kem1024.getPublicKey(
+        keyPackage.mediaKemPrivateKey,
+      );
+
+      if (
+        derivedMediaPublicKey.length !== 1568 ||
+        keyPackage.mediaKemPublicKey.length !== derivedMediaPublicKey.length ||
+        !derivedMediaPublicKey.every(
+          (byte, index) => byte === keyPackage.mediaKemPublicKey[index],
+        )
+      ) {
+        throw new Error('The saved ML-KEM media keypair does not match');
+      }
+    } else if (savedDevice.mediaKemPublicKey) {
+      throw new Error('The saved media public key has no matching private key');
+    }
+
     return keyPackage;
   } catch (error) {
     keyPackage.privatePackage.fill(0);
+    keyPackage.mediaKemPrivateKey?.fill(0);
     throw error;
   }
 };
@@ -225,6 +271,15 @@ export const PqcMessagingPage: FC = () => {
   const [draft, setDraft] = useState('');
   const [attachment, setAttachment] = useState<File | null>(null);
   const [messages, setMessages] = useState<PqcDisplayMessage[]>([]);
+  const [privateMediaId, setPrivateMediaId] = useState('');
+  const [privateMediaDownload, setPrivateMediaDownload] =
+    useState<Uint8Array | null>(null);
+  const [privateMediaBusy, setPrivateMediaBusy] = useState(false);
+  const privateMediaBusyRef = useRef(false);
+  const privateMediaDownloadRef = useRef<Uint8Array | null>(null);
+  const privateMediaUploadPlaintextRef = useRef<Uint8Array | null>(null);
+  const privateMediaRequestId = useRef(0);
+  const privateMediaSessionRef = useRef(device);
   const [fingerprintsConfirmed, setFingerprintsConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -250,9 +305,20 @@ export const PqcMessagingPage: FC = () => {
   };
 
   useEffect(() => {
+    privateMediaSessionRef.current = device;
+  }, [device]);
+
+  useEffect(() => {
     pageMounted.current = true;
     return () => {
       pageMounted.current = false;
+      privateMediaRequestId.current += 1;
+      privateMediaDownloadRef.current?.fill(0);
+      privateMediaDownloadRef.current = null;
+      privateMediaUploadPlaintextRef.current?.fill(0);
+      privateMediaUploadPlaintextRef.current = null;
+      privateMediaSessionRef.current?.keyPackage.privatePackage.fill(0);
+      privateMediaSessionRef.current?.keyPackage.mediaKemPrivateKey?.fill(0);
       deviceSessionLockRelease.current?.();
       deviceSessionLockRelease.current = null;
     };
@@ -504,6 +570,7 @@ export const PqcMessagingPage: FC = () => {
         deviceId,
         keyPackage.fingerprint,
         pqcDeviceAuthPublicKey(keyPackage),
+        keyPackage.mediaKemPublicKey,
         keyPackage.keyPackageMessage,
       );
       if (
@@ -536,6 +603,7 @@ export const PqcMessagingPage: FC = () => {
       setRecoveryAvailable(true);
     } catch (cause) {
       keyPackage?.privatePackage.fill(0);
+      keyPackage?.mediaKemPrivateKey?.fill(0);
       releaseDeviceSessionLock();
       throw cause;
     }
@@ -551,7 +619,7 @@ export const PqcMessagingPage: FC = () => {
       throw new Error('No encrypted recovery record exists in this browser');
 
     const plaintext = await restorePqcRecoveryData(
-      decodeBase64(encoded),
+      decodePqcBase64(encoded),
       recoveryPassphrase,
     );
     try {
@@ -597,47 +665,63 @@ export const PqcMessagingPage: FC = () => {
         );
 
       const keyPackage = await restorePqcDeviceKeyPackage(savedDevice);
-      const restoredDevice: LocalDeviceSession = {
-        accountId: currentAccountId,
-        apiDevice,
-        actorUri: savedDevice.actorUri,
-        keyPackage,
-      };
+      try {
+        if (
+          (savedDevice.mediaKemPublicKey != null ||
+            apiDevice.media_kem_public_key != null) &&
+          apiDevice.media_kem_public_key !==
+            encodePqcBase64(keyPackage.mediaKemPublicKey)
+        ) {
+          throw new Error(
+            'The registered media key does not match this device recovery record',
+          );
+        }
+        const restoredDevice: LocalDeviceSession = {
+          accountId: currentAccountId,
+          apiDevice,
+          actorUri: savedDevice.actorUri,
+          keyPackage,
+        };
 
-      const restoredGroups: ActiveConversation[] = [];
-      for (const savedGroup of record.activeConversations ?? []) {
-        // Only restore the fingerprint snapshot the user previously confirmed.
-        // New server-listed devices need a fresh out-of-band verification flow.
-        const conversation = savedGroup.conversation;
-        const state = deserializePqcGroupState(
-          decodeBase64(savedGroup.serializedState),
-        );
-        const context = await contextForConversation(
-          conversation,
-          restoredDevice,
-          state.groupContext.cipherSuite,
-        );
-        restoredGroups.push({
-          conversation,
-          context,
-          state,
-          lastMessageId: savedGroup.lastMessageId,
-          messages: savedGroup.messages ?? [],
-          pendingOutbound: savedGroup.pendingOutbound ?? [],
-          pendingMemberAddition: savedGroup.pendingMemberAddition,
-          pendingMemberRemoval: savedGroup.pendingMemberRemoval,
-          pendingDeviceRemoval: savedGroup.pendingDeviceRemoval,
-          pendingGroupSetup: savedGroup.pendingGroupSetup,
-        });
+        const restoredGroups: ActiveConversation[] = [];
+        for (const savedGroup of record.activeConversations ?? []) {
+          // Only restore the fingerprint snapshot the user previously confirmed.
+          // New server-listed devices need a fresh out-of-band verification flow.
+          const conversation = savedGroup.conversation;
+          const state = deserializePqcGroupState(
+            decodeBase64(savedGroup.serializedState),
+          );
+          const context = await contextForConversation(
+            conversation,
+            restoredDevice,
+            state.groupContext.cipherSuite,
+          );
+          restoredGroups.push({
+            conversation,
+            context,
+            state,
+            lastMessageId: savedGroup.lastMessageId,
+            messages: savedGroup.messages ?? [],
+            pendingOutbound: savedGroup.pendingOutbound ?? [],
+            pendingMemberAddition: savedGroup.pendingMemberAddition,
+            pendingMemberRemoval: savedGroup.pendingMemberRemoval,
+            pendingDeviceRemoval: savedGroup.pendingDeviceRemoval,
+            pendingGroupSetup: savedGroup.pendingGroupSetup,
+          });
+        }
+
+        await acquireDeviceSessionLock();
+        setDevices(activeDevices);
+        setConversations(nextConversations);
+        setDevice(restoredDevice);
+        setRecoveredConversations(restoredGroups);
+        setActive(restoredGroups[0] ?? null);
+        setMessages(restoredGroups[0]?.messages ?? []);
+      } catch (error) {
+        keyPackage.privatePackage.fill(0);
+        keyPackage.mediaKemPrivateKey?.fill(0);
+        throw error;
       }
-
-      await acquireDeviceSessionLock();
-      setDevices(activeDevices);
-      setConversations(nextConversations);
-      setDevice(restoredDevice);
-      setRecoveredConversations(restoredGroups);
-      setActive(restoredGroups[0] ?? null);
-      setMessages(restoredGroups[0]?.messages ?? []);
     } finally {
       plaintext.fill(0);
     }
@@ -761,8 +845,27 @@ export const PqcMessagingPage: FC = () => {
     }
   };
 
+  const clearPrivateMediaDownload = () => {
+    privateMediaRequestId.current += 1;
+    privateMediaDownloadRef.current?.fill(0);
+    privateMediaDownloadRef.current = null;
+    setPrivateMediaDownload(null);
+  };
+
+  const cancelPrivateMediaWork = useCallback(() => {
+    privateMediaRequestId.current += 1;
+    privateMediaUploadPlaintextRef.current?.fill(0);
+    privateMediaUploadPlaintextRef.current = null;
+    privateMediaDownloadRef.current?.fill(0);
+    privateMediaDownloadRef.current = null;
+    setPrivateMediaDownload(null);
+  }, []);
+
   const lockDevice = () => {
+    cancelPrivateMediaWork();
+    setPrivateMediaId('');
     device?.keyPackage.privatePackage.fill(0);
+    device?.keyPackage.mediaKemPrivateKey?.fill(0);
     releaseDeviceSessionLock();
     setDevice(null);
     setActive(null);
@@ -770,6 +873,25 @@ export const PqcMessagingPage: FC = () => {
     setMessages([]);
     setRecoveryPassphrase('');
   };
+
+  useEffect(() => {
+    if (!device || device.accountId === currentAccountId) return;
+
+    // Account identity is external auth state; erase this session when it changes.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    cancelPrivateMediaWork();
+    device.keyPackage.privatePackage.fill(0);
+    device.keyPackage.mediaKemPrivateKey?.fill(0);
+    deviceSessionLockRelease.current?.();
+    deviceSessionLockRelease.current = null;
+    setDevice(null);
+    setActive(null);
+    setRecoveredConversations([]);
+    setMessages([]);
+    setPrivateMediaId('');
+    setPrivateMediaDownload(null);
+    setRecoveryPassphrase('');
+  }, [cancelPrivateMediaWork, currentAccountId, device]);
 
   const revokeRegisteredDevice = async (registeredDevice: PqcDevice) => {
     const lockWasAlreadyHeld = deviceSessionLockRelease.current !== null;
@@ -779,6 +901,9 @@ export const PqcMessagingPage: FC = () => {
       if (result?.revocation_pending) {
         if (device?.apiDevice.id === registeredDevice.id) {
           device.keyPackage.privatePackage.fill(0);
+          device.keyPackage.mediaKemPrivateKey?.fill(0);
+          cancelPrivateMediaWork();
+          setPrivateMediaId('');
           releaseDeviceSessionLock();
           setDevice(null);
           setActive(null);
@@ -799,6 +924,9 @@ export const PqcMessagingPage: FC = () => {
 
       if (device?.apiDevice.id === registeredDevice.id) {
         device.keyPackage.privatePackage.fill(0);
+        device.keyPackage.mediaKemPrivateKey?.fill(0);
+        cancelPrivateMediaWork();
+        setPrivateMediaId('');
         releaseDeviceSessionLock();
         setDevice(null);
         setActive(null);
@@ -818,7 +946,7 @@ export const PqcMessagingPage: FC = () => {
     const encoded = localStorage.getItem(recoveryStorageKey);
     if (!encoded) throw new Error('No local recovery record exists');
     const plaintext = await restorePqcRecoveryData(
-      decodeBase64(encoded),
+      decodePqcBase64(encoded),
       recoveryPassphrase,
     );
     let record: Partial<LocalRecoveryRecord>;
@@ -860,23 +988,24 @@ export const PqcMessagingPage: FC = () => {
         }
 
         const keyPackage = await restorePqcDeviceKeyPackage(savedDevice);
-        const signer: PqcDeviceRequestSigner = {
-          deviceId: savedDevice.apiDevice.device_id,
-          sign: (method, path, body, timestamp, nonce) =>
-            signPqcDeviceRequest(
-              keyPackage,
-              method,
-              path,
-              timestamp,
-              nonce,
-              body,
-            ),
-        };
-        let result: PqcDeviceRevocationResult | undefined;
+        let result: Awaited<ReturnType<typeof revokePqcDevice>>;
         try {
+          const signer: PqcDeviceRequestSigner = {
+            deviceId: savedDevice.apiDevice.device_id,
+            sign: (method, path, body, timestamp, nonce) =>
+              signPqcDeviceRequest(
+                keyPackage,
+                method,
+                path,
+                timestamp,
+                nonce,
+                body,
+              ),
+          };
           result = await revokePqcDevice(remoteDevice.id, signer);
         } finally {
           keyPackage.privatePackage.fill(0);
+          keyPackage.mediaKemPrivateKey?.fill(0);
         }
         if (result?.revocation_pending) {
           await reload();
@@ -888,6 +1017,7 @@ export const PqcMessagingPage: FC = () => {
 
       localStorage.removeItem(recoveryStorageKey);
       device?.keyPackage.privatePackage.fill(0);
+      device?.keyPackage.mediaKemPrivateKey?.fill(0);
       releaseDeviceSessionLock();
       setDevice(null);
       setActive(null);
@@ -899,6 +1029,187 @@ export const PqcMessagingPage: FC = () => {
       releaseDeviceSessionLock();
       throw cause;
     }
+  };
+
+  const uploadPrivateMedia = async (
+    event: SyntheticEvent<HTMLInputElement>,
+  ) => {
+    if (privateMediaBusyRef.current) return;
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!file) return;
+    privateMediaBusyRef.current = true;
+    privateMediaUploadPlaintextRef.current?.fill(0);
+    privateMediaUploadPlaintextRef.current = null;
+    clearPrivateMediaDownload();
+    const requestId = ++privateMediaRequestId.current;
+    setPrivateMediaBusy(true);
+    try {
+      await withBusy(async () => {
+        if (
+          !device ||
+          !currentAccountId ||
+          device.accountId !== currentAccountId
+        ) {
+          throw new Error(
+            'Unlock this browser device before encrypting private media',
+          );
+        }
+        if (file.size <= 0 || file.size > PRIVATE_MEDIA_MAX_BYTES)
+          throw new Error(
+            'Private media must contain between 1 byte and 32 MiB',
+          );
+        if (
+          !device.apiDevice.media_kem_public_key ||
+          !device.apiDevice.media_encryption_ready
+        ) {
+          throw new Error('This registered device has no media encryption key');
+        }
+
+        const token = crypto.randomUUID();
+        const plaintext = new Uint8Array(await file.arrayBuffer());
+        if (
+          requestId !== privateMediaRequestId.current ||
+          privateMediaSessionRef.current !== device
+        ) {
+          plaintext.fill(0);
+          throw new Error(
+            'Private media upload was canceled by locking the device',
+          );
+        }
+        privateMediaUploadPlaintextRef.current = plaintext;
+        try {
+          const encrypted = await encryptPqcPrivateMedia(
+            plaintext,
+            device.apiDevice.device_id,
+            decodePqcBase64(device.apiDevice.media_kem_public_key),
+            currentAccountId,
+            token,
+          );
+          try {
+            if (
+              requestId !== privateMediaRequestId.current ||
+              privateMediaSessionRef.current !== device
+            )
+              throw new Error(
+                'Private media upload was canceled by locking the device',
+              );
+            const uploaded = await uploadPqcPrivateMedia(
+              encrypted.ciphertext,
+              encrypted.nonce,
+              encrypted.authTag,
+              token,
+              encrypted.envelope,
+              () =>
+                requestId !== privateMediaRequestId.current ||
+                privateMediaSessionRef.current !== device,
+            );
+            if (
+              requestId !== privateMediaRequestId.current ||
+              privateMediaSessionRef.current !== device
+            )
+              throw new Error(
+                'Private media upload was canceled by locking the device',
+              );
+            clearPrivateMediaDownload();
+            setPrivateMediaId(uploaded.id);
+          } finally {
+            encrypted.ciphertext.fill(0);
+            encrypted.nonce.fill(0);
+            encrypted.authTag.fill(0);
+          }
+        } finally {
+          plaintext.fill(0);
+          if (privateMediaUploadPlaintextRef.current === plaintext)
+            privateMediaUploadPlaintextRef.current = null;
+        }
+      });
+    } finally {
+      privateMediaBusyRef.current = false;
+      setPrivateMediaBusy(false);
+    }
+  };
+
+  const downloadPrivateMedia = async () => {
+    if (!device || !currentAccountId || device.accountId !== currentAccountId)
+      throw new Error('Unlock this browser device to decrypt private media');
+    if (privateMediaBusyRef.current) return;
+    privateMediaBusyRef.current = true;
+    clearPrivateMediaDownload();
+    const requestId = ++privateMediaRequestId.current;
+    const mediaId = privateMediaId;
+    setPrivateMediaBusy(true);
+    try {
+      const result = await fetchPqcPrivateMedia(mediaId);
+      try {
+        if (
+          requestId !== privateMediaRequestId.current ||
+          privateMediaSessionRef.current !== device
+        )
+          throw new Error(
+            'Private media decryption was canceled by locking the device',
+          );
+        const envelope = result.envelopes.find(
+          (candidate) => candidate.device_id === device.apiDevice.device_id,
+        );
+        if (!envelope)
+          throw new Error(
+            'No encrypted media key is available for this device',
+          );
+        const plaintext = await decryptPqcPrivateMedia(
+          result.ciphertext,
+          decodePqcBase64(result.nonce),
+          decodePqcBase64(result.auth_tag),
+          envelope,
+          device.apiDevice.device_id,
+          device.keyPackage.mediaKemPrivateKey ?? new Uint8Array(),
+          currentAccountId,
+          result.token,
+        );
+        if (
+          requestId !== privateMediaRequestId.current ||
+          privateMediaSessionRef.current !== device
+        ) {
+          plaintext.fill(0);
+          throw new Error(
+            'Private media decryption was canceled by locking the device',
+          );
+        }
+        clearPrivateMediaDownload();
+        privateMediaDownloadRef.current = plaintext;
+        setPrivateMediaDownload(plaintext);
+      } finally {
+        result.ciphertext.fill(0);
+      }
+    } finally {
+      privateMediaBusyRef.current = false;
+      setPrivateMediaBusy(false);
+    }
+  };
+
+  const savePrivateMediaDownload = () => {
+    if (
+      !privateMediaDownload ||
+      device?.accountId !== currentAccountId ||
+      privateMediaBusyRef.current
+    ) {
+      clearPrivateMediaDownload();
+      return;
+    }
+    const url = URL.createObjectURL(
+      new Blob([Uint8Array.from(privateMediaDownload)], {
+        type: 'application/octet-stream',
+      }),
+    );
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `private-media-${privateMediaId}.bin`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => {
+      URL.revokeObjectURL(url);
+    }, 0);
   };
 
   const withBusy = async (operation: () => Promise<void> | void) => {
@@ -2194,13 +2505,13 @@ export const PqcMessagingPage: FC = () => {
   };
 
   return (
-    <Column label='Experimental post-quantum encrypted messaging'>
-      <ColumnHeader title='Experimental encrypted messaging' />
+    <Column label='Post-quantum encrypted messaging'>
+      <ColumnHeader title='Encrypted messaging' />
       <div className='scrollable'>
         <div className='column__berlin'>
           <p role='status'>
-            This is an experimental MLS prototype. Messages here are separate
-            from ordinary Mastodon direct messages.
+            Post-quantum encrypted messaging, built on MLS. Messages here are
+            separate from ordinary Mastodon direct messages.
           </p>
           <p>
             The server relays encrypted payloads but still sees conversation
@@ -2288,7 +2599,7 @@ export const PqcMessagingPage: FC = () => {
               <button
                 type='button'
                 className='button'
-                disabled={busy}
+                disabled={busy && !privateMediaBusy}
                 onClick={lockDevice}
               >
                 Lock this device
@@ -2396,6 +2707,71 @@ export const PqcMessagingPage: FC = () => {
                 this browser.
               </p>
               <p>{devices.length} device(s) registered on this account.</p>
+              <section aria-labelledby='pqc-private-media-title'>
+                <h3 id='pqc-private-media-title'>Private media</h3>
+                <p>
+                  Files are encrypted in this browser to this uploader device.
+                  Keep its encrypted recovery file to retain access.
+                </p>
+                <label htmlFor='pqc-private-media-id'>Private file ID</label>
+                <input
+                  id='pqc-private-media-id'
+                  type='text'
+                  value={privateMediaId}
+                  disabled={
+                    busy ||
+                    privateMediaBusy ||
+                    !device.apiDevice.media_encryption_ready ||
+                    device.accountId !== currentAccountId
+                  }
+                  onChange={(event) => {
+                    clearPrivateMediaDownload();
+                    setPrivateMediaId(event.currentTarget.value);
+                  }}
+                />
+                <label htmlFor='pqc-private-media-upload'>
+                  Encrypt and upload a private file (up to 32 MiB)
+                </label>
+                <input
+                  id='pqc-private-media-upload'
+                  type='file'
+                  disabled={
+                    busy ||
+                    !device.apiDevice.media_encryption_ready ||
+                    device.accountId !== currentAccountId
+                  }
+                  onChange={(event) => void uploadPrivateMedia(event)}
+                />
+                {privateMediaId.trim() &&
+                  device.accountId === currentAccountId && (
+                    <>
+                      <button
+                        type='button'
+                        className='button'
+                        disabled={
+                          busy ||
+                          privateMediaBusy ||
+                          device.accountId !== currentAccountId
+                        }
+                        onClick={() => {
+                          void withBusy(downloadPrivateMedia);
+                        }}
+                      >
+                        Decrypt this file on this device
+                      </button>
+                      {privateMediaDownload && (
+                        <button
+                          type='button'
+                          className='button'
+                          disabled={busy || privateMediaBusy}
+                          onClick={savePrivateMediaDownload}
+                        >
+                          Save decrypted file
+                        </button>
+                      )}
+                    </>
+                  )}
+              </section>
             </section>
           )}
           {devices.map((registeredDevice) => {
@@ -3031,6 +3407,10 @@ const saveRecovery = async (
       publicPackage: encodeBase64(device.keyPackage.publicPackage),
       keyPackageMessage: encodeBase64(device.keyPackage.keyPackageMessage),
       privatePackage: encodeBase64(device.keyPackage.privatePackage),
+      mediaKemPublicKey: encodePqcBase64(device.keyPackage.mediaKemPublicKey),
+      mediaKemPrivateKey: device.keyPackage.mediaKemPrivateKey
+        ? encodePqcBase64(device.keyPackage.mediaKemPrivateKey)
+        : undefined,
     },
     activeConversations: recoveredConversations.flatMap(
       ({

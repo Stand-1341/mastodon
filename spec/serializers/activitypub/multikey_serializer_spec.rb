@@ -26,6 +26,7 @@ RSpec.describe ActivityPub::MultikeySerializer do
   end
 
   it 'does not publish a revoked key through the actor document' do
+    record.account.keypairs.where(type: :'ml-dsa-87').where.not(id: record.id).delete_all
     record.update!(revoked: true)
     actor_json = serialized_record_json(record.account, ActivityPub::ActorSerializer, adapter: ActivityPub::Adapter)
 

@@ -61,9 +61,9 @@ RSpec.describe Rake::Task do
         'hybrid_group_enforced'
       )
       expect(inventory.fetch('activitypub')).to include(
-        'pqc_signing_enabled' => (ENV['PQC_ACTIVITYPUB_SIGNING'] == 'true'),
+        'pqc_signing_enabled' => (ENV['PQC_ACTIVITYPUB_SIGNING'] != 'false'),
         'pqc_inbound_proof_required' => (ENV['PQC_ACTIVITYPUB_REQUIRE_PROOF'] == 'true'),
-        'key_provisioning' => 'explicit_per_account',
+        'key_provisioning' => 'automatic_on_create',
         'local_account_count' => Account.local.count,
         'accounts_with_usable_ml_dsa_key' => a_kind_of(Integer),
         'accounts_missing_usable_ml_dsa_key' => a_kind_of(Integer),
@@ -77,7 +77,6 @@ RSpec.describe Rake::Task do
         'account_quota_bytes' => Pqc::PrivateMedia::CreateService::MAX_ACCOUNT_STORAGE
       )
       expect(inventory.fetch('encrypted_messaging')).to include(
-        'experimental_relay_enabled' => (ENV['PQC_E2EE_EXPERIMENTAL'] == 'true'),
         'protocol' => 'MLS_256_XWING_AES256GCM_SHA512_MLDSA87',
         'cipher_suite_id' => '0xf011',
         'cipher_suite_registry_status' => 'ts-mls private-use; not IANA assigned',

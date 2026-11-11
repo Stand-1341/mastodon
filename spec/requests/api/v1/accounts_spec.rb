@@ -37,6 +37,25 @@ RSpec.describe '/api/v1/accounts' do
       end
     end
 
+    context 'when the account has a usable ML-DSA-87 key' do
+      include PqcKeyProvisioningHelpers
+
+      let(:account) { Fabricate(:account) }
+
+      before do
+        # Auto-provisioning may have created one on a capable runtime.
+        account.keypairs.where(type: :'ml-dsa-87').delete_all
+        Fabricate(:keypair, account: account, type: :'ml-dsa-87', public_key: synthetic_ml_dsa_87_public_key)
+      end
+
+      it 'includes pqc_signed on another account as a boolean' do
+        get "/api/v1/accounts/#{account.id}"
+
+        expect(response).to have_http_status(200)
+        expect(response.parsed_body[:pqc_signed]).to be(true)
+      end
+    end
+
     context 'when the account does not exist' do
       it 'returns http not found' do
         get '/api/v1/accounts/1'

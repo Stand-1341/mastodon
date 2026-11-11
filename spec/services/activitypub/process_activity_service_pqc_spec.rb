@@ -40,6 +40,17 @@ RSpec.describe ActivityPub::ProcessActivityService do
     expect(ActivityPub::Activity).to have_received(:factory).with(secured, actor, hash_including(relayed_through_actor: relay))
   end
 
+  it 'signs and accepts ML-DSA proofs by default when the flag is unset' do
+    ClimateControl.modify(PQC_ACTIVITYPUB_SIGNING: nil) do
+      default_secured = ActivityPub::PqcSigning.new(document).sign!(signer)
+
+      expect(default_secured['proof']['cryptosuite']).to eq('mldsa87-jcs-2024')
+      described_class.new.call(default_secured.to_json, actor)
+    end
+
+    expect(ActivityPub::Activity).to have_received(:factory)
+  end
+
   it 'preserves the original dual-signed document for forwarding without rewriting its context' do
     described_class.new.call(secured.to_json, actor)
 

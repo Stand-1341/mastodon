@@ -11,6 +11,19 @@ RSpec.describe Multibase do
         expect { described_class.decode(input) }.to raise_error(described_class::Error)
       end
     end
+
+    it 'rejects non-canonical base64url encodings' do
+      expect { described_class.decode('uAB==') }.to raise_error(described_class::Error, /Non-canonical/)
+    end
+  end
+
+  describe '.decode_multicodec' do
+    it 'rejects a varint prefix truncated before the second byte' do
+      encoded = "u#{Base64.urlsafe_encode64("\x92".b, padding: false)}"
+
+      expect { described_class.decode_multicodec(encoded) }
+        .to raise_error(described_class::Error, /Truncated Multicodec prefix/)
+    end
   end
 
   describe '.encode_key_from_pem' do
@@ -85,6 +98,22 @@ RSpec.describe Multibase do
         expect(OpenSSL::PKey.read(pem).public_to_der).to eq(key.public_to_der)
         expect(described_class.decode_multicodec(encoded_key).last.bytesize).to eq(2592)
       end
+    end
+  end
+
+  describe 'ML-DSA-87 SubjectPublicKeyInfo' do
+    it 'round-trips a public key with valid DER lengths' do
+      public_bytes = "\x42" * 2592
+      der = described_class::ML_DSA_87_PUB_DER_HEADER + public_bytes
+      pem = "-----BEGIN PUBLIC KEY-----\n#{Base64.strict_encode64(der).scan(/.{1,64}/).join("\n")}\n-----END PUBLIC KEY-----\n"
+
+      encoded = described_class.encode_key_from_pem(pem, type: :'ml-dsa-87')
+      expect(described_class.decode_multicodec(encoded)).to eq([:'mldsa-87-pub', public_bytes])
+
+      type, decoded_pem = described_class.decode_key_to_pem(encoded)
+      expect(type).to eq(:'ml-dsa-87')
+      decoded_der = Base64.strict_decode64(decoded_pem.lines[1...-1].map(&:strip).join)
+      expect(OpenSSL::ASN1.decode(decoded_der).to_der).to eq(decoded_der)
     end
   end
 

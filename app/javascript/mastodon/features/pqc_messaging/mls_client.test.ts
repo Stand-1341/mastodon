@@ -1,4 +1,5 @@
 import { ml_dsa87 } from '@noble/post-quantum/ml-dsa.js';
+import { ml_kem1024 } from '@noble/post-quantum/ml-kem.js';
 import {
   createApplicationMessage,
   createCommit,
@@ -45,6 +46,10 @@ import {
   trustPqcDevice,
   verifyPqcDeviceBinding,
 } from './mls_client';
+import {
+  decryptPqcPrivateMedia,
+  encryptPqcPrivateMedia,
+} from './private_media';
 
 describe('PQC MLS client', () => {
   it('accepts only the unified ML-DSA-87 MLS suite', async () => {
@@ -54,6 +59,214 @@ describe('PQC MLS client', () => {
     await expect(
       getPqcMlsCiphersuite(PQC_MLS_CIPHERSUITE_ID),
     ).resolves.toBeDefined();
+  });
+
+  it('encrypts and decrypts private media with a device-bound envelope', async () => {
+    const recipient = ml_kem1024.keygen();
+    const plaintext = new TextEncoder().encode('private media bytes');
+    const token = 'b2d2dc46-96f7-4f5b-8a83-949bc86c8159';
+    const encrypted = await encryptPqcPrivateMedia(
+      plaintext,
+      'browser-device',
+      recipient.publicKey,
+      '123456',
+      token,
+    );
+
+    await expect(
+      decryptPqcPrivateMedia(
+        encrypted.ciphertext,
+        encrypted.nonce,
+        encrypted.authTag,
+        encrypted.envelope,
+        'browser-device',
+        recipient.secretKey,
+        '123456',
+        token,
+      ),
+    ).resolves.toSatisfy((actual: Uint8Array) => {
+      const matches = actual.every((byte, index) => byte === plaintext[index]);
+      actual.fill(0);
+      return matches;
+    });
+    const uppercaseToken = token.toUpperCase();
+    const uppercaseEncrypted = await encryptPqcPrivateMedia(
+      plaintext,
+      'browser-device',
+      recipient.publicKey,
+      '123456',
+      uppercaseToken,
+    );
+    expect(uppercaseEncrypted.token).toBe(token);
+    await expect(
+      decryptPqcPrivateMedia(
+        uppercaseEncrypted.ciphertext,
+        uppercaseEncrypted.nonce,
+        uppercaseEncrypted.authTag,
+        uppercaseEncrypted.envelope,
+        'browser-device',
+        recipient.secretKey,
+        '123456',
+        uppercaseToken,
+      ),
+    ).resolves.toSatisfy((actual: Uint8Array) => {
+      const matches = actual.every((byte, index) => byte === plaintext[index]);
+      actual.fill(0);
+      return matches;
+    });
+    const wrongDeviceEnvelope = { ...encrypted.envelope };
+    await expect(
+      decryptPqcPrivateMedia(
+        encrypted.ciphertext,
+        encrypted.nonce,
+        encrypted.authTag,
+        wrongDeviceEnvelope,
+        'different-device',
+        recipient.secretKey,
+        '123456',
+        token,
+      ),
+    ).rejects.toThrow(/another device/);
+    wrongDeviceEnvelope.kem_ciphertext = '';
+    wrongDeviceEnvelope.wrapped_key = '';
+    const wrongAccountEnvelope = { ...encrypted.envelope };
+    await expect(
+      decryptPqcPrivateMedia(
+        encrypted.ciphertext,
+        encrypted.nonce,
+        encrypted.authTag,
+        wrongAccountEnvelope,
+        'browser-device',
+        recipient.secretKey,
+        '654321',
+        token,
+      ),
+    ).rejects.toThrow(/authenticated/);
+    wrongAccountEnvelope.kem_ciphertext = '';
+    wrongAccountEnvelope.wrapped_key = '';
+    uppercaseEncrypted.ciphertext.fill(0);
+    uppercaseEncrypted.nonce.fill(0);
+    uppercaseEncrypted.authTag.fill(0);
+    uppercaseEncrypted.envelope.kem_ciphertext = '';
+    uppercaseEncrypted.envelope.wrapped_key = '';
+    encrypted.ciphertext.fill(0);
+    encrypted.nonce.fill(0);
+    encrypted.authTag.fill(0);
+    encrypted.envelope.kem_ciphertext = '';
+    encrypted.envelope.wrapped_key = '';
+    plaintext.fill(0);
+    recipient.publicKey.fill(0);
+    recipient.secretKey.fill(0);
+  });
+
+  it('rejects empty, oversized, and malformed private media inputs before decryption', async () => {
+    const recipient = ml_kem1024.keygen();
+    const maximum = await encryptPqcPrivateMedia(
+      new Uint8Array(32 * 1024 * 1024),
+      'browser-device',
+      recipient.publicKey,
+      '123456',
+      '45dc1248-c9b7-44a2-96f4-63f90886b1bf',
+    );
+    expect(maximum.ciphertext).toHaveLength(32 * 1024 * 1024);
+    maximum.ciphertext.fill(0);
+    maximum.nonce.fill(0);
+    maximum.authTag.fill(0);
+    maximum.envelope.kem_ciphertext = '';
+    maximum.envelope.wrapped_key = '';
+    const valid = await encryptPqcPrivateMedia(
+      new Uint8Array([7]),
+      'browser-device',
+      recipient.publicKey,
+      '123456',
+      '4da9d561-d705-436b-8dc7-ed10aa215af7',
+    );
+
+    await expect(
+      decryptPqcPrivateMedia(
+        new Uint8Array(),
+        valid.nonce,
+        valid.authTag,
+        valid.envelope,
+        'browser-device',
+        recipient.secretKey,
+        '123456',
+        valid.token,
+      ),
+    ).rejects.toThrow(/metadata/);
+    await expect(
+      encryptPqcPrivateMedia(
+        new Uint8Array(32 * 1024 * 1024 + 1),
+        'browser-device',
+        recipient.publicKey,
+        '123456',
+        valid.token,
+      ),
+    ).rejects.toThrow(/32 MiB/);
+    await expect(
+      decryptPqcPrivateMedia(
+        valid.ciphertext,
+        valid.nonce,
+        valid.authTag,
+        { ...valid.envelope, kem_ciphertext: '%%%=' },
+        'browser-device',
+        recipient.secretKey,
+        '123456',
+        valid.token,
+      ),
+    ).rejects.toThrow();
+    await expect(
+      decryptPqcPrivateMedia(
+        valid.ciphertext,
+        valid.nonce,
+        valid.authTag,
+        { ...valid.envelope, wrapped_key: '%%%=' },
+        'browser-device',
+        recipient.secretKey,
+        '123456',
+        valid.token,
+      ),
+    ).rejects.toThrow();
+    valid.ciphertext.fill(0);
+    valid.nonce.fill(0);
+    valid.authTag.fill(0);
+    valid.envelope.kem_ciphertext = '';
+    valid.envelope.wrapped_key = '';
+    maximum.envelope.kem_ciphertext = '';
+    maximum.envelope.wrapped_key = '';
+    recipient.publicKey.fill(0);
+    recipient.secretKey.fill(0);
+  });
+
+  it('rejects modified encrypted private media bytes', async () => {
+    const recipient = ml_kem1024.keygen();
+    const encrypted = await encryptPqcPrivateMedia(
+      new TextEncoder().encode('authenticated media'),
+      'browser-device',
+      recipient.publicKey,
+      '123456',
+      '3d7b2b0c-6c3d-4ec2-a311-c1d011cf74bc',
+    );
+    encrypted.ciphertext[0] = (encrypted.ciphertext[0] ?? 0) ^ 1;
+
+    await expect(
+      decryptPqcPrivateMedia(
+        encrypted.ciphertext,
+        encrypted.nonce,
+        encrypted.authTag,
+        encrypted.envelope,
+        'browser-device',
+        recipient.secretKey,
+        '123456',
+        encrypted.token,
+      ),
+    ).rejects.toThrow(/authenticated/);
+    recipient.secretKey.fill(0);
+    encrypted.ciphertext.fill(0);
+    encrypted.envelope.kem_ciphertext = '';
+    encrypted.envelope.wrapped_key = '';
+    encrypted.nonce.fill(0);
+    encrypted.authTag.fill(0);
   });
 
   it('uses the same ML-DSA-87 device identity for MLS and HTTP authentication', async () => {
@@ -87,6 +300,11 @@ describe('PQC MLS client', () => {
     );
 
     expect(pqcDeviceAuthPublicKey(device)).toEqual(mlsPublicKey);
+    expect(device.mediaKemPublicKey).toHaveLength(1568);
+    expect(device.mediaKemPrivateKey).toHaveLength(3168);
+    expect(
+      ml_kem1024.getPublicKey(device.mediaKemPrivateKey ?? new Uint8Array()),
+    ).toEqual(device.mediaKemPublicKey);
     expect(
       ml_dsa87.verify(
         signature,
@@ -583,6 +801,7 @@ describe('PQC MLS client', () => {
     expect(trustedDevices.size).toBe(0);
 
     device.privatePackage.fill(0);
+    device.mediaKemPrivateKey?.fill(0);
   });
 
   it('rotates one-time KeyPackages while preserving the verified device signing identity', async () => {
@@ -613,6 +832,9 @@ describe('PQC MLS client', () => {
     expect(state.groupContext.groupId).toBeDefined();
 
     device.privatePackage.fill(0);
+    device.mediaKemPrivateKey?.fill(0);
+    rotated.privatePackage.fill(0);
+    rotated.mediaKemPrivateKey?.fill(0);
     trustedDevices.clear();
   });
 
@@ -659,7 +881,9 @@ describe('PQC MLS client', () => {
     } finally {
       trusted.clear();
       alice.privatePackage.fill(0);
+      alice.mediaKemPrivateKey?.fill(0);
       bob.privatePackage.fill(0);
+      bob.mediaKemPrivateKey?.fill(0);
     }
   });
 

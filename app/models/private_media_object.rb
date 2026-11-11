@@ -7,7 +7,10 @@
 #  id                      :bigint(8)        not null, primary key
 #  auth_tag                :string           not null
 #  byte_size               :bigint(8)        not null
+#  client_auth_tag         :string
+#  client_nonce            :string
 #  content_type            :string           default("application/octet-stream"), not null
+#  device_key_envelopes    :text
 #  key_encryption_provider :string           not null
 #  nonce                   :string           not null
 #  storage_key             :string           not null
@@ -24,6 +27,10 @@ class PrivateMediaObject < ApplicationRecord
   validates :token, uniqueness: true, format: { with: /\A[0-9a-f-]{36}\z/i }
   validates :storage_key, uniqueness: true
   validates :byte_size, numericality: { only_integer: true, greater_than: 0 }
+
+  def device_key_envelope_attached?
+    device_key_envelopes.present?
+  end
 
   after_destroy_commit :delete_encrypted_blob
 

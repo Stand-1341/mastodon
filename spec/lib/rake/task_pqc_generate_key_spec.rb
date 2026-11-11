@@ -27,27 +27,32 @@ RSpec.describe Rake::Task do
     end
 
     it 'provisions only the specified local account and outputs only the account and public key URI' do
-      account
       other_account = Fabricate(:account)
+      other_key_count = other_account.keypairs.count
+      account.keypairs.where(type: :'ml-dsa-87').delete_all
+      key_count = Keypair.count
 
       ClimateControl.modify PQC_ACTIVITYPUB_SIGNING: 'false' do
         expect { task.invoke('alice') }.to output(%r{\AML-DSA-87 key available for @alice: https?://[^\n]+#ml-dsa-87-[a-f0-9]{32}\n\z}).to_stdout
       end
 
       expect(account.keypairs.find_by!(type: :'ml-dsa-87')).to have_attributes(public_key: public_key, private_key: private_key)
-      expect(other_account.keypairs.pluck(:type)).to eq(['rsa'])
+      expect(Keypair.count).to eq(key_count + 1)
+      expect(other_account.keypairs.count).to eq(other_key_count)
     end
 
     it 'is idempotent when an administrator invokes it again' do
-      account
+      account.keypairs.where(type: :'ml-dsa-87').delete_all
 
       expect { task.invoke('alice') }.to output(/ML-DSA-87 key available for @alice:/).to_stdout
       task.reenable
+      existing_key = account.keypairs.find_by!(type: :'ml-dsa-87')
+      existing_attributes = existing_key.attributes
 
       expect do
         expect { task.invoke('alice') }.to output(/ML-DSA-87 key available for @alice:/).to_stdout
       end.to_not change(Keypair, :count)
-      expect(OpenSSL::PKey).to have_received(:generate_key).with('ML-DSA-87').once
+      expect(existing_key.reload.attributes).to eq(existing_attributes)
     end
 
     it 'explains that a missing argument requires one local username' do
@@ -84,13 +89,13 @@ RSpec.describe Rake::Task do
     end
 
     it 'reports unsupported runtimes without private key output or partial database changes' do
-      account
+      account.keypairs.where(type: :'ml-dsa-87').delete_all
       allow(OpenSSL::PKey).to receive(:generate_key).with('ML-DSA-87').and_raise(OpenSSL::PKey::PKeyError, 'unsupported')
 
       expect do
         expect { task.invoke('alice') }.to raise_error(SystemExit)
       end.to output(/OpenSSL 3\.5 or newer/).to_stderr
-      expect(account.keypairs.pluck(:type)).to eq(['rsa'])
+      expect(account.keypairs.where(type: :'ml-dsa-87')).to be_empty
     end
   end
 end

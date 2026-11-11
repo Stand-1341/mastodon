@@ -368,6 +368,10 @@ class Account < ApplicationRecord
     end
   end
 
+  def pqc_signed?
+    keypair(type: :'ml-dsa-87').present?
+  end
+
   def tags_as_strings=(tag_names)
     hashtags_map = Tag.find_or_create_by_names(tag_names).index_by(&:name)
 
@@ -537,6 +541,7 @@ class Account < ApplicationRecord
   before_validation :prepare_contents, if: :local?
   before_create :prepare_reach_filter, if: :local?
   before_create :generate_keys
+  after_commit :provision_pqc_signing_key, on: :create, if: :local?
   before_destroy :clean_feed_manager
 
   def ensure_keys!
@@ -570,6 +575,15 @@ class Account < ApplicationRecord
 
     keypair = OpenSSL::PKey::RSA.new(2048)
     keypairs << keypairs.build(local_fragment: "#rsa-#{SecureRandom.hex(8)}", type: :rsa, public_key: keypair.public_key.to_pem, private_key: keypair.to_pem)
+  end
+
+  # Post-commit so the row exists before the service takes its lock, and
+  # best-effort so that a runtime without ML-DSA support (or any other failure)
+  # can never fail account creation. `rake pqc:backfill` can retry later.
+  def provision_pqc_signing_key
+    ActivityPub::GeneratePqcKeyService.new.call(self)
+  rescue StandardError => e
+    Rails.logger.warn("Could not provision ML-DSA-87 signing key for @#{acct}: #{e.class}: #{e.message}")
   end
 
   def normalize_domain

@@ -13,6 +13,7 @@ RSpec.describe ActivityPub::ActorSerializer do
 
     it 'preserves RSA-only publication without adding a CID context or generating keys' do
       rsa_key = record.keypair(type: :rsa)
+      record.keypairs.where(type: :'ml-dsa-87').delete_all
 
       expect { json }.to_not change(Keypair, :count)
       expect(json['publicKey']).to eq(

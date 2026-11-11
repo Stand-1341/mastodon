@@ -1031,9 +1031,6 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_28_130000) do
 
   create_table "pqc_devices", force: :cascade do |t|
     t.bigint "account_id", null: false
-    t.bigint "account_binding_issued_at"
-    t.string "account_binding_key_uri"
-    t.binary "account_binding_signature"
     t.string "device_id", null: false
     t.string "fingerprint", null: false
     t.binary "key_package", null: false
@@ -1046,6 +1043,10 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_28_130000) do
     t.binary "auth_public_key"
     t.datetime "revocation_pending_at"
     t.string "auth_fingerprint"
+    t.binary "media_kem_public_key"
+    t.string "account_binding_key_uri"
+    t.bigint "account_binding_issued_at"
+    t.binary "account_binding_signature"
     t.index ["account_id", "device_id"], name: "index_pqc_devices_on_account_id_and_device_id", unique: true
     t.index ["account_id", "key_package_claim_id"], name: "index_pqc_devices_on_account_and_key_package_claim", where: "(key_package_claim_id IS NOT NULL)"
     t.index ["account_id"], name: "index_pqc_devices_on_account_id"
@@ -1180,6 +1181,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_10_28_130000) do
     t.string "auth_tag", null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
+    t.string "client_nonce"
+    t.string "client_auth_tag"
+    t.text "device_key_envelopes"
     t.index ["account_id"], name: "index_private_media_objects_on_account_id"
     t.index ["storage_key"], name: "index_private_media_objects_on_storage_key", unique: true
     t.index ["token"], name: "index_private_media_objects_on_token", unique: true

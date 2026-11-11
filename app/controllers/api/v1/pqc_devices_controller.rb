@@ -7,7 +7,6 @@ class Api::V1::PqcDevicesController < Api::BaseController
 
   before_action -> { doorkeeper_authorize! :write, :'write:statuses' }
   before_action :require_user!
-  before_action :require_pqc_messaging_enabled!
   before_action :authenticate_pqc_device_request!, only: [:destroy, :update_key_package, :key_packages]
   before_action :require_authenticated_key_package_device!, only: [:update_key_package]
   before_action :require_authenticated_package_claim_device!, only: [:key_packages]
@@ -21,6 +20,7 @@ class Api::V1::PqcDevicesController < Api::BaseController
     raise ArgumentError, 'KeyPackage exceeds 512 KiB' if key_package.bytesize > 512.kilobytes
 
     auth_public_key = decode_auth_public_key(params.require(:device_auth_public_key))
+    media_kem_public_key = decode_media_kem_public_key(params.require(:media_kem_public_key))
     fingerprint = params.require(:fingerprint)
     expected_fingerprint = Digest::SHA256.hexdigest(auth_public_key)
     raise ArgumentError, 'Device fingerprint must match its ML-DSA-87 authentication key' unless secure_compare(fingerprint, expected_fingerprint)
@@ -29,10 +29,11 @@ class Api::V1::PqcDevicesController < Api::BaseController
     binding = Pqc::Messaging::DeviceBindingCertificate.issue(account: current_account, device_id:, fingerprint:)
 
     device = current_account.pqc_devices.create!(
-      device_id: device_id,
-      fingerprint: fingerprint,
-      auth_public_key: auth_public_key,
-      key_package: key_package,
+      device_id:,
+      fingerprint:,
+      auth_public_key:,
+      media_kem_public_key:,
+      key_package:,
       account_binding_key_uri: binding[:key_uri],
       account_binding_issued_at: binding[:issued_at],
       account_binding_signature: binding[:signature]
@@ -74,6 +75,12 @@ class Api::V1::PqcDevicesController < Api::BaseController
       raise ArgumentError, 'Device authentication key cannot be changed' if device.auth_public_key.present? && device.auth_public_key != auth_public_key
 
       device.auth_public_key ||= auth_public_key
+    end
+    if params[:media_kem_public_key].present?
+      media_kem_public_key = decode_media_kem_public_key(params[:media_kem_public_key])
+      raise ArgumentError, 'Media encryption key cannot be changed' if device.media_kem_public_key.present? && device.media_kem_public_key != media_kem_public_key
+
+      device.media_kem_public_key ||= media_kem_public_key
     end
     device.update!(key_package: key_package, key_package_consumed_at: nil)
 
@@ -140,6 +147,13 @@ class Api::V1::PqcDevicesController < Api::BaseController
     head 403 if params[:exclude_device_id].present? && @authenticated_pqc_device&.device_id != params[:exclude_device_id].to_s
   end
 
+  def decode_media_kem_public_key(encoded)
+    key = Base64.strict_decode64(encoded)
+    raise ArgumentError, 'ML-KEM-1024 media public key must be 1568 bytes' unless key.bytesize == 1568
+
+    key
+  end
+
   def decode_auth_public_key(encoded)
     key = Base64.strict_decode64(encoded)
     raise ArgumentError, 'ML-DSA-87 authentication key must be 2592 bytes' unless key.bytesize == Pqc::Messaging::DeviceRequestAuthenticator::PUBLIC_KEY_BYTES
@@ -153,10 +167,6 @@ class Api::V1::PqcDevicesController < Api::BaseController
       ActiveSupport::SecurityUtils.secure_compare(left, right)
   end
 
-  def require_pqc_messaging_enabled!
-    head 404 unless ENV['PQC_E2EE_EXPERIMENTAL'] == 'true'
-  end
-
   def serialize_device(device)
     {
       id: device.id,
@@ -164,6 +174,8 @@ class Api::V1::PqcDevicesController < Api::BaseController
       fingerprint: device.fingerprint,
       device_auth_ready: device.auth_public_key&.bytesize == Pqc::Messaging::DeviceRequestAuthenticator::PUBLIC_KEY_BYTES && device.auth_fingerprint == device.fingerprint,
       device_binding: device.ensure_account_binding!,
+      media_kem_public_key: device.media_kem_public_key.present? ? Base64.strict_encode64(device.media_kem_public_key) : nil,
+      media_encryption_ready: device.media_kem_public_key.present?,
       revocation_pending: device.revocation_pending_at.present?,
       created_at: device.created_at,
     }

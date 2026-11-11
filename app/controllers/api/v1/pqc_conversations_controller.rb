@@ -5,7 +5,6 @@ class Api::V1::PqcConversationsController < Api::BaseController
 
   before_action -> { doorkeeper_authorize! :write, :'write:statuses' }
   before_action :require_user!
-  before_action :require_pqc_messaging_enabled!
   before_action :authenticate_pqc_device_request!, only: [
     :create, :complete_setup, :commit_member, :remove_member, :remove_device,
     :invite_member, :request_leave, :accept_invitation, :decline_invitation
@@ -221,10 +220,6 @@ class Api::V1::PqcConversationsController < Api::BaseController
 
   def require_authenticated_setup_device!
     require_authenticated_pqc_device_id!(params[:setup_device_id])
-  end
-
-  def require_pqc_messaging_enabled!
-    head 404 unless ENV['PQC_E2EE_EXPERIMENTAL'] == 'true'
   end
 
   def serialize_conversation(conversation)

@@ -76,9 +76,9 @@ class ActivityPub::ObjectIntegrityProof
       'proofPurpose' => 'assertionMethod',
     }
 
-    # The ML-DSA suite binds the document's final context in the proof configuration.
+    # ML-DSA-87 is Category 5; use the suite's SHA-512 hash and explicit context binding.
     proof_config = options.merge('@context' => document['@context']).to_json_c14n
-    to_be_signed = Digest::SHA256.digest(proof_config) + Digest::SHA256.digest(document.to_json_c14n)
+    to_be_signed = Digest::SHA512.digest(proof_config) + Digest::SHA512.digest(document.to_json_c14n)
     signature = key.keypair.sign(nil, to_be_signed)
 
     document.merge('proof' => options.merge('proofValue' => "u#{Base64.urlsafe_encode64(signature, padding: false)}"))
@@ -116,6 +116,22 @@ class ActivityPub::ObjectIntegrityProof
     transformed_data = unsecured_document.to_json_c14n
     proof_config = proof_options.to_json_c14n
     to_be_verified = Digest::SHA256.digest(proof_config) + Digest::SHA256.digest(transformed_data)
+    keypair.verify(nil, proof_bytes, to_be_verified)
+  end
+
+  # Mastodon's experimental ML-DSA-87 JCS suite uses SHA-512 for FIPS 204 Category 5.
+  # Its identifier is intentionally not represented as a W3C draft cryptosuite.
+  def self.verify_mldsa87_jcs_mastodon_2026(document, keypair) # rubocop:disable Naming/VariableNumber
+    unsecured_document = document.without('proof')
+    proof_options = document['proof'].without('proofValue')
+    proof_bytes = Multibase.decode(document['proof']['proofValue'])
+    proof_options['@context'] = unsecured_document['@context']
+
+    transformed_data = unsecured_document.to_json_c14n
+    proof_config = proof_options.to_json_c14n
+
+    to_be_verified = Digest::SHA512.digest(proof_config) + Digest::SHA512.digest(transformed_data)
+
     keypair.verify(nil, proof_bytes, to_be_verified)
   end
 end

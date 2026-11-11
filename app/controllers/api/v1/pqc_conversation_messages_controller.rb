@@ -7,7 +7,6 @@ class Api::V1::PqcConversationMessagesController < Api::BaseController
 
   before_action -> { doorkeeper_authorize! :write, :'write:statuses' }
   before_action :require_user!
-  before_action :require_pqc_messaging_enabled!
   before_action :set_conversation
   before_action :authenticate_pqc_device_request!
   before_action :require_authenticated_message_device!
@@ -68,10 +67,6 @@ class Api::V1::PqcConversationMessagesController < Api::BaseController
   def require_authenticated_message_device!
     device_id = action_name == 'index' ? params[:device_id] : params[:sender_device_id]
     require_authenticated_pqc_device_id!(device_id)
-  end
-
-  def require_pqc_messaging_enabled!
-    head 404 unless ENV['PQC_E2EE_EXPERIMENTAL'] == 'true'
   end
 
   def limit

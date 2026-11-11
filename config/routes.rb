@@ -20,6 +20,7 @@ Rails.application.routes.draw do
   mount LetterOpenerWeb::Engine, at: 'letter_opener' if Rails.env.development?
 
   get 'health', to: 'health#show'
+  get 'health/pqc', to: 'health/pqc#show', defaults: { format: :json }
 
   authenticate :user, ->(user) { user.role&.can?(:view_devops) } do
     mount Sidekiq::Web, at: 'sidekiq', as: :sidekiq

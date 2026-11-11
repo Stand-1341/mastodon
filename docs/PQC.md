@@ -1,4 +1,12 @@
-# Post-quantum readiness and experimental signing
+# Post-quantum readiness and signing
+
+## Support tier
+
+This is hobby-tier software: it is designed for a small self-hosted instance run
+for friends, not for a public instance or anything production-grade. Nothing here
+has been audited, and no interoperability guarantee is offered beyond this
+codebase. Every local account is provisioned with an ML-DSA-87 signing key
+automatically when it is created.
 
 ## Phase 0: inventory and at-rest hardening
 
@@ -49,16 +57,18 @@ and streaming, see [PQC_TLS.md](PQC_TLS.md). Conventional public web certificate
 remain unchanged. Hybrid key exchange does not make their signatures
 post-quantum-resistant.
 
-## Phase 2: experimental additive ActivityPub signing
+## Phase 2: additive ActivityPub signing
 
 ### Security and compatibility boundary
 
-`PQC_ACTIVITYPUB_SIGNING` is **disabled by default**. Only the literal value
-`true` enables it. Enabling it does not generate keys or replace account keys.
+`PQC_ACTIVITYPUB_SIGNING` is **enabled by default**. Signing happens whenever an
+account has a usable ML-DSA-87 key, and only the literal value `false` turns it
+off — that switch exists for runtimes whose OpenSSL cannot handle ML-DSA-87, not
+as a feature gate. Signing does not generate keys or replace account keys.
 Account creation
-and HTTP federation authentication remain RSA-compatible. Accounts without a
-usable ML-DSA-87 key continue signing with RSA only, so federation remains
-available during staged per-account provisioning. The inventory reports how
+and HTTP federation authentication remain RSA-compatible. Existing accounts
+without a usable ML-DSA-87 key continue signing with RSA only, so federation
+remains available until they are provisioned. The inventory reports how
 many local accounts still lack a usable key; do not describe their outbound
 activities as PQC-signed.
 
@@ -69,16 +79,17 @@ signatures and the legacy actor `publicKey` remain intact. Existing
 authorized-fetch signing rules are respected. The 87 proof profile uses the
 same JCS/SHA-256 processing as the existing 44 implementation, with a distinct
 identifier and ML-DSA-87 key. The current W3C Quantum-Resistant Cryptosuites
-specification lists only ML-DSA-44, so this 87 profile is experimental and
-requires peer support; it must not be advertised as W3C-standardized.
+specification lists only ML-DSA-44, so this 87 profile is not
+W3C-standardized and requires peer support; it must not be advertised as
+such.
 
 This is **additive compatibility**, not a policy requiring every federation peer
 to verify a post-quantum signature. RSA-only authentication is still accepted,
 and non-provisioned/expired/revoked-key accounts remain RSA-only. Do not describe
 this mode as downgrade-resistant, post-quantum-only federation or end-to-end
 encryption. Peer compatibility, especially older relay implementations, must be
-validated before broad rollout. Keep the flag off outside controlled tests until
-those tests pass.
+validated before broad rollout. Keep the flag off outside a test instance until
+those checks pass.
 
 ### Optional strict inbound policy for controlled peers
 
@@ -94,10 +105,14 @@ Regardless of this flag, if an activity advertises the supported ML-DSA
 cryptosuite, Mastodon verifies that proof and rejects the activity if the proof
 is invalid. The default permits legacy activities that omit an ML-DSA proof.
 
-### Provision one account explicitly
+### Provisioning keys
 
-Back up the database and existing Active Record Encryption secrets first. Run in
-an OpenSSL 3.5+ runtime whose provider supports ML-DSA-87 generation, export and
+Every local account is provisioned automatically after it is created;
+provisioning is best effort, so a runtime without ML-DSA support logs a warning
+rather than failing signup. `bin/rails pqc:backfill` provisions any local account
+that still lacks a usable key. To provision or re-provision one account, back up
+the database and existing Active Record Encryption secrets first, then run in an
+OpenSSL 3.5+ runtime whose provider supports ML-DSA-87 generation, export and
 signing:
 
 ```sh
@@ -131,7 +146,7 @@ with a fresh profile cache, so in-band Updates cannot keep a withdrawn proof key
 authorized indefinitely. Other activities use the existing actor-staleness bound,
 not instantaneous revocation propagation.
 
-### Enable only on controlled instances
+### Enabling signing
 
 Set this in the selected deployment's environment and restart web/background
 processes:
@@ -158,7 +173,7 @@ Check the linked runtime and key custody, or explicitly turn off the feature.
 
 ### Validation and rollback
 
-Before enabling outside test instances:
+Before enabling:
 
 1. Test a Create, Update, Delete, reply and boost between two controlled HTTPS
    instances, including relay/forwarding paths.
@@ -222,13 +237,18 @@ explain browser startup or full page-load delays.
 ## Private media encryption
 
 An opt-in owner-only private-media API is available separately from regular
-ActivityPub attachments. It uses AES-256-GCM with a fresh 256-bit data key per
-object, authenticated object/account context, and a wrapped data key. Only the
-owning account can download or delete an object through the authenticated API;
-downloads are `application/octet-stream` with `no-store` and `nosniff`. Objects
-are limited to 32 MB. Public media, thumbnails, federation, and ordinary status
-attachments are unchanged. The application server and authorized owner account
-can decrypt this content, so this is at-rest encryption rather than E2EE.
+ActivityPub attachments. The browser encrypts file bytes with AES-256-GCM and a
+fresh 256-bit data key, then wraps that key to the uploader device's ML-KEM-1024
+public key. The server stores ciphertext and the device-bound key envelope; it
+cannot unwrap the browser's media key. Only the owning account can download or
+delete an object through the authenticated API. Downloads are ciphertext with
+`application/octet-stream`, `no-store`, and `nosniff`; authorized browsers decrypt
+after retrieving the envelope. Objects are limited to 32 MiB. Public media,
+thumbnails, federation, and ordinary status attachments are unchanged. This
+private-media path is client-side encryption to one device, not group sharing:
+keep that device's encrypted recovery record and passphrase to retain access.
+The server-side KMS data-key provider is used by the legacy at-rest private
+media path, not to encrypt browser-submitted ciphertext.
 
 The local Docker setup enables `PQC_PRIVATE_MEDIA_ENCRYPTION=true` and creates a
 random development-only wrapping key in the ignored `.env.development.local`.
@@ -288,30 +308,38 @@ curl -H "Authorization: Bearer $TOKEN" \
 ```
 
 The record is not a normal status attachment and is not shared with followers
-or other recipients. The uploader's device does not perform client-side
-encryption. ML-KEM is not used as a file cipher; recipient key distribution is
-part of the deferred messaging design.
+or other recipients. Uploads from the `/pqc` private-media panel are encrypted
+in the browser before upload. AES-GCM encrypts the file; ML-KEM-1024 derives a
+one-device wrapping key for the random AES data key. The envelope can be attached
+once to the object and is accepted only for an active registered device belonging
+to the owner. The object ID can be entered on another session of the same device
+after restoring its encrypted recovery record. Other devices cannot decrypt it,
+and device rotation does not automatically rewrap old media. The older direct
+`POST /api/v1/private_media` flow without a client envelope remains a distinct
+server-side at-rest-encrypted upload; it does not provide end-to-end secrecy from
+the server.
 
-## Experimental MLS client prototype
+## MLS encrypted messaging
 
 Existing Mastodon direct messages remain ordinary restricted-visibility
-ActivityPub posts. A separate client-side MLS primitive now demonstrates
+ActivityPub posts. A separate client-side MLS client provides
 two-device group setup and encrypted message exchange using
 `MLS_256_XWING_AES256GCM_SHA512_MLDSA87` from the pinned `ts-mls` release
 candidate. This suite combines X-Wing hybrid key establishment with ML-DSA-87
-signatures, but its cipher-suite identifiers are experimental and the library
+signatures. Its cipher-suite identifier is a private-use value, and the library
 has not had a formal security audit.
 
 The selected `ts-mls` suite uses private-use ID `0xf011`; it is not an IANA
 assigned MLS cipher suite, so clients must use this exact private suite to
 interoperate. As of 2026-10-14, the active [MLS post-quantum cipher-suite
 draft](https://datatracker.ietf.org/doc/draft-ietf-mls-pq-ciphersuites/) has
-different proposed combinations. This prototype's
+different proposed combinations. This client's
 X-Wing/AES-256-GCM/SHA-512/ML-DSA-87 combination is not one of those draft
 suites. The deployment inventory reports
 the private-use ID and marks cross-client interoperability unavailable; do not
-claim compatibility with other MLS implementations until the suite is
-standardized and an independent client passes a wire-level test.
+claim compatibility with other MLS implementations. There is no
+cross-implementation interoperability test in the repository: the wire-level
+test and the Rust OpenMLS harness were deleted in commit `ddbb0de3`.
 
 ML-DSA-87 is the single signature algorithm used for new PQC identities in
 ActivityPub and MLS. Account and device keys remain separate: the server-held
@@ -340,12 +368,11 @@ that uses a different suite. The `0xf011` suite remains private-use and
 cross-client interoperability is unavailable. All devices in a group must use
 matching KeyPackages. No automatic group-state conversion occurs.
 
-The prototype binds MLS basic credentials to explicitly confirmed SHA-256
+The client binds MLS basic credentials to explicitly confirmed SHA-256
 fingerprints and includes a passing local two-device round-trip test. Group-state
 exports and browser recovery data use AES-256-GCM with a passphrase-derived
-PBKDF2 key (310,000 SHA-256 iterations). The prototype now has an experimental
-authenticated relay API, enabled in the local Docker override with
-`PQC_E2EE_EXPERIMENTAL=true`. Tokens need `write:statuses`.
+PBKDF2 key (310,000 SHA-256 iterations). The client has an authenticated relay
+API, always enabled. Tokens need `write:statuses`.
 Every messaging state change, including invitation, acceptance, decline,
 departure, setup, membership and relay operations, requires a fresh ML-DSA-87
 proof signed by the registered device key, bound to the HTTP method, full request path,
@@ -435,7 +462,7 @@ when the last group removal commits. Revoking the currently active device from
 a group therefore requires another registered device to perform that removal.
 After activation, a participant can request departure; another active member must create the MLS
 Remove commit, which the relay applies atomically. The group creator cannot
-leave this prototype group. A client that loses its encrypted recovery record
+leave the group. A client that loses its encrypted recovery record
 may still require manual group recovery. There is no message retention or
 abuse-control policy.
 Existing Mastodon DMs are not encrypted. For a device move, register a fresh
@@ -447,6 +474,6 @@ group state. The old device remains necessary if setup or recovery fails. Do not
 clone one recovery file into two concurrently active browsers. This is a manual
 group-by-group move, not automatic recovery of a lost device.
 
-Do not present this experimental prototype as production ready; it still needs
-operational retention and abuse decisions, independent protocol review, and
-cross-client interoperability testing.
+This is hobby-tier software, not production ready: it has no operational
+retention or abuse-control policy, has not had an independent protocol review,
+and has no cross-client interoperability test.

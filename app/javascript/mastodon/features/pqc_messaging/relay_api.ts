@@ -6,6 +6,7 @@ import {
 } from 'mastodon/api';
 
 import { verifyPqcKeyPackageBinding } from './mls_client';
+import type { PqcPrivateMediaEnvelope } from './private_media';
 
 export interface PqcDeviceRequestSigner {
   deviceId: string;
@@ -41,12 +42,30 @@ export const setPqcDeviceRequestSigner = (
   deviceRequestSigner = signer;
 };
 
+export interface PqcPrivateMediaResult {
+  id: string;
+  token: string;
+  nonce: string;
+  auth_tag: string;
+  envelopes: PqcPrivateMediaEnvelope[];
+  ciphertext: Uint8Array;
+}
+
+interface PqcPrivateMediaUploadResult {
+  id: string;
+  byte_size: number;
+  content_type: string;
+  url: string;
+}
+
 export interface PqcDevice {
   id: number;
   device_id: string;
   fingerprint: string;
   device_binding: PqcDeviceBindingCertificate | null;
+  media_kem_public_key: string | null;
   device_auth_ready: boolean;
+  media_encryption_ready: boolean;
   revocation_pending: boolean;
   created_at: string;
 }
@@ -104,22 +123,113 @@ export const registerPqcDevice = async (
   deviceId: string,
   fingerprint: string,
   deviceAuthPublicKey: Uint8Array,
+  mediaKemPublicKey: Uint8Array,
   encodedKeyPackage: Uint8Array,
-): Promise<PqcDevice> =>
-  apiRequestPost<
+): Promise<PqcDevice> => {
+  const expectedMediaKey = encodeBase64(mediaKemPublicKey);
+  const device = await apiRequestPost<
     PqcDevice,
     {
       device_id: string;
       fingerprint: string;
       device_auth_public_key: string;
+      media_kem_public_key: string;
       key_package: string;
     }
   >('v1/pqc_devices', {
     device_id: deviceId,
     fingerprint,
     device_auth_public_key: encodeBase64(deviceAuthPublicKey),
+    media_kem_public_key: expectedMediaKey,
     key_package: encodeBase64(encodedKeyPackage),
   });
+  if (
+    device.media_kem_public_key !== expectedMediaKey ||
+    !device.media_encryption_ready
+  )
+    throw new Error('Registered media key does not match this device keypair');
+  return device;
+};
+
+export const uploadPqcPrivateMedia = async (
+  ciphertext: Uint8Array,
+  nonce: Uint8Array,
+  authTag: Uint8Array,
+  token: string,
+  envelope: PqcPrivateMediaEnvelope,
+  isCancelled: () => boolean = () => false,
+): Promise<{ id: string }> => {
+  const data = new FormData();
+  data.append(
+    'file',
+    new File([Uint8Array.from(ciphertext)], 'private-media.bin', {
+      type: 'application/octet-stream',
+    }),
+  );
+  data.append('token', token);
+  const response = await api().post<PqcPrivateMediaUploadResult>(
+    '/api/v1/private_media',
+    data,
+  );
+  const id = response.data.id;
+  if (!id) throw new Error('Private media upload returned no object id');
+  try {
+    if (isCancelled()) throw new Error('Private media upload was canceled');
+    if (!/^[0-9]+$/.test(id))
+      throw new Error('Private media upload returned an invalid object id');
+    await apiRequestPost<
+      { id: string },
+      {
+        token: string;
+        nonce: string;
+        auth_tag: string;
+        envelope: PqcPrivateMediaEnvelope;
+      }
+    >(`v1/private_media/${encodeURIComponent(id)}/envelope`, {
+      token,
+      nonce: encodeBase64(nonce),
+      auth_tag: encodeBase64(authTag),
+      envelope,
+    });
+    if (isCancelled()) throw new Error('Private media upload was canceled');
+  } catch (error) {
+    try {
+      await apiRequest('DELETE', `v1/private_media/${encodeURIComponent(id)}`);
+    } catch {
+      // Preserve the original failure; an unattached object can be removed later.
+    }
+    throw error;
+  }
+  return { id };
+};
+
+export const fetchPqcPrivateMedia = async (
+  id: string,
+): Promise<PqcPrivateMediaResult> => {
+  const normalizedId = id.trim();
+  if (!normalizedId) throw new Error('Enter a private media ID');
+  const encodedId = encodeURIComponent(normalizedId);
+  const metadata = await apiRequestGet<
+    Omit<PqcPrivateMediaResult, 'ciphertext'>
+  >(`v1/private_media/${encodedId}/envelope`);
+  if (
+    metadata.id !== normalizedId ||
+    typeof metadata.token !== 'string' ||
+    typeof metadata.nonce !== 'string' ||
+    typeof metadata.auth_tag !== 'string' ||
+    !Array.isArray(metadata.envelopes)
+  )
+    throw new Error('Private media metadata does not match the requested file');
+
+  const response = await api().get<ArrayBuffer>(
+    `/api/v1/private_media/${encodedId}`,
+    { responseType: 'arraybuffer' },
+  );
+  if (!(response.data instanceof ArrayBuffer))
+    throw new Error('Private media response could not be read');
+  const ciphertext = new Uint8Array(response.data);
+  return { ...metadata, ciphertext };
+};
 
 export const listPqcDevices = (): Promise<PqcDevice[]> =>
   apiRequestGet('v1/pqc_devices');
