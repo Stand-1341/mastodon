@@ -1,5 +1,7 @@
 import { IntlProvider } from 'react-intl';
 
+import { MemoryRouter } from 'react-router-dom';
+
 import { Map as ImmutableMap } from 'immutable';
 
 import { render, screen, within } from '@testing-library/react';
@@ -7,11 +9,13 @@ import { vi } from 'vitest';
 
 import { AccountBadges } from '@/mastodon/components/account_header/badges';
 import { useAccount } from '@/mastodon/hooks/useAccount';
-import type { Account } from '@/mastodon/models/account';
+import type { Account, AccountShapeFull } from '@/mastodon/models/account';
 import type { RootState } from '@/mastodon/store';
 import { useAppSelector } from '@/mastodon/store';
 import { accountFactoryImmutable } from '@/testing/factories';
 import type { ApiAccountJSON } from 'mastodon/api_types/accounts';
+
+import { StatusRedesignHeader } from '../status/header';
 
 import { PqcBadge, VerifiedBadge } from '.';
 
@@ -76,6 +80,45 @@ describe('<PqcBadge />', () => {
     expect(pqcBadge.getAttribute('role')).toBe('img');
     expect(pqcBadge.getAttribute('aria-label')).toBe(PQC_LABEL);
     expect(within(verifiedContainer).queryByRole('img')).toBeNull();
+  });
+});
+
+describe('PQC badge in a post header', () => {
+  it('shows the compact checkmark for signed post authors', () => {
+    const account = accountFactoryImmutable({
+      id: '1',
+      acct: 'showcase_account',
+      username: 'showcase_account',
+      pqc_signed: true,
+    });
+    const accountShape = account.toJS() as AccountShapeFull;
+    const state = { meta: ImmutableMap({ me: null }) };
+    vi.mocked(useAccount).mockReturnValue(account);
+    vi.mocked(useAppSelector).mockImplementation(
+      (selector: (state: RootState) => unknown) =>
+        selector(state as unknown as RootState),
+    );
+
+    render(
+      <MemoryRouter>
+        <IntlProvider locale='en'>
+          <StatusRedesignHeader
+            status={{
+              id: 'status-1',
+              account: accountShape,
+              created_at: new Date().toISOString(),
+              visibility: 'public',
+              mentions: [],
+            }}
+          />
+        </IntlProvider>
+      </MemoryRouter>,
+    );
+
+    const badge = screen.getByRole('img', { name: PQC_LABEL });
+
+    expect(badge.className).toContain('accent');
+    expect(within(badge).queryByText(PQC_LABEL)).toBeNull();
   });
 });
 

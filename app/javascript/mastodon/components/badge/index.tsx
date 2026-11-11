@@ -178,7 +178,10 @@ export const BlockedBadge: FC<Partial<BadgeProps>> = ({ label, ...props }) => (
   />
 );
 
-export const PqcBadge: FC<PresetBadgeProps> = (props) => {
+export const PqcBadge: FC<PresetBadgeProps & { compact?: boolean }> = ({
+  compact = false,
+  ...props
+}) => {
   const intl = useIntl();
   const label = intl.formatMessage({
     id: 'account.badges.pqc_signed',
@@ -189,7 +192,7 @@ export const PqcBadge: FC<PresetBadgeProps> = (props) => {
     <Badge
       variant='accent'
       icon={<CheckIcon />}
-      label={label}
+      label={compact ? null : label}
       title={label}
       aria-label={label}
       role='img'

@@ -10,6 +10,7 @@ import { useCurrentAccountId } from '@/mastodon/hooks/useAccountId';
 import type { AccountStatusShape } from '@/mastodon/models/status';
 
 import { Avatar } from '../avatar';
+import { PqcBadge } from '../badge';
 import { DisplayName } from '../display_name';
 import { useAccountHandle } from '../display_name/default';
 import { RelativeTimestamp } from '../relative_timestamp';
@@ -104,8 +105,9 @@ export const StatusRedesignHeader: React.FC<StatusRedesignHeaderProps> = ({
       </Link>
 
       <div>
-        <p className={classes.name}>
+        <div className={classes.name}>
           {displayName}
+          {account.pqc_signed && <PqcBadge compact />}
           &bull;
           <Link
             to={{
@@ -116,7 +118,7 @@ export const StatusRedesignHeader: React.FC<StatusRedesignHeaderProps> = ({
           >
             <RelativeTimestamp timestamp={status.created_at} />
           </Link>
-        </p>
+        </div>
 
         <p className={classes.handle}>
           <Link
